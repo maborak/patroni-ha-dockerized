@@ -1,0 +1,186 @@
+services:
+  # etcd cluster (2 nodes)
+  etcd1:
+    image: quay.io/coreos/etcd:v3.5.0
+    container_name: etcd1
+    hostname: etcd1
+    ports:
+      - "${ETCD1_CLIENT_PORT}:2379"
+      - "${ETCD1_PEER_PORT}:2380"
+    volumes:
+      - etcd1_data:/etcd-data
+    networks:
+      - patroni_network
+    command: >
+      etcd
+      --name=etcd1
+      --data-dir=/etcd-data
+      --listen-client-urls=http://0.0.0.0:2379
+      --advertise-client-urls=http://etcd1:2379
+      --listen-peer-urls=http://0.0.0.0:2380
+      --initial-advertise-peer-urls=http://etcd1:2380
+      --initial-cluster=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380
+      --initial-cluster-state=new
+      --initial-cluster-token=etcd-cluster-1
+
+  etcd2:
+    image: quay.io/coreos/etcd:v3.5.0
+    container_name: etcd2
+    hostname: etcd2
+    ports:
+      - "${ETCD2_CLIENT_PORT}:2379"
+      - "${ETCD2_PEER_PORT}:2380"
+    volumes:
+      - etcd2_data:/etcd-data
+    networks:
+      - patroni_network
+    command: >
+      etcd
+      --name=etcd2
+      --data-dir=/etcd-data
+      --listen-client-urls=http://0.0.0.0:2379
+      --advertise-client-urls=http://etcd2:2379
+      --listen-peer-urls=http://0.0.0.0:2380
+      --initial-advertise-peer-urls=http://etcd2:2380
+      --initial-cluster=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380
+      --initial-cluster-state=new
+      --initial-cluster-token=etcd-cluster-1
+
+  # Patroni/PostgreSQL cluster
+  # Base template for Patroni nodes
+  patroni_base: &patroni_base
+    build:
+      context: ./patroni
+      dockerfile: Dockerfile
+    # Note: Must run as root for supervisor, but Patroni runs as postgres user via supervisor
+    networks:
+      - patroni_network
+    depends_on:
+      - etcd1
+      - etcd2
+
+  db1:
+    <<: *patroni_base
+    container_name: db1
+    hostname: db1
+    ports:
+      - "${PATRONI_DB1_PORT}:5431"
+      - "${PATRONI_DB1_API_PORT}:8001"
+    environment:
+      - DEFAULT_DATABASE=${DEFAULT_DATABASE:-maborak}
+    volumes:
+      - db1_data:/var/lib/postgresql
+      - ./configs/patroni1.yml:/etc/patroni/patroni.yml:ro
+      - ./scripts:/etc/patroni/scripts:ro
+      - ./ssh_keys/barman_rsa:/home/postgres/.ssh/barman_rsa:ro
+      - ./ssh_keys/barman_rsa.pub:/ssh_keys/barman_rsa.pub:ro
+
+  db2:
+    <<: *patroni_base
+    container_name: db2
+    hostname: db2
+    ports:
+      - "${PATRONI_DB2_PORT}:5431"
+      - "${PATRONI_DB2_API_PORT}:8001"
+    environment:
+      - DEFAULT_DATABASE=${DEFAULT_DATABASE:-maborak}
+    volumes:
+      - db2_data:/var/lib/postgresql
+      - ./configs/patroni2.yml:/etc/patroni/patroni.yml:ro
+      - ./scripts:/etc/patroni/scripts:ro
+      - ./ssh_keys/barman_rsa:/home/postgres/.ssh/barman_rsa:ro
+      - ./ssh_keys/barman_rsa.pub:/ssh_keys/barman_rsa.pub:ro
+
+  db3:
+    <<: *patroni_base
+    container_name: db3
+    hostname: db3
+    ports:
+      - "${PATRONI_DB3_PORT}:5431"
+      - "${PATRONI_DB3_API_PORT}:8001"
+    environment:
+      - DEFAULT_DATABASE=${DEFAULT_DATABASE:-maborak}
+    volumes:
+      - db3_data:/var/lib/postgresql
+      - ./configs/patroni3.yml:/etc/patroni/patroni.yml:ro
+      - ./scripts:/etc/patroni/scripts:ro
+      - ./ssh_keys/barman_rsa:/home/postgres/.ssh/barman_rsa:ro
+      - ./ssh_keys/barman_rsa.pub:/ssh_keys/barman_rsa.pub:ro
+
+  db4:
+    <<: *patroni_base
+    container_name: db4
+    hostname: db4
+    ports:
+      - "${PATRONI_DB4_PORT}:5431"
+      - "${PATRONI_DB4_API_PORT}:8001"
+    environment:
+      - DEFAULT_DATABASE=${DEFAULT_DATABASE:-maborak}
+    volumes:
+      - db4_data:/var/lib/postgresql
+      - ./configs/patroni4.yml:/etc/patroni/patroni.yml:ro
+      - ./scripts:/etc/patroni/scripts:ro
+      - ./ssh_keys/barman_rsa:/home/postgres/.ssh/barman_rsa:ro
+      - ./ssh_keys/barman_rsa.pub:/ssh_keys/barman_rsa.pub:ro
+
+  # Barman backup server
+  barman:
+    build:
+      context: ./barman
+      dockerfile: Dockerfile
+    container_name: barman
+    hostname: barman
+    environment:
+      - BARMAN_SERVER_NAME=main
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-Dgo7cQ41WDTnd89G46TgfVtr}
+    ports:
+      - "${BARMAN_PORT}:5432"
+    volumes:
+      - barman_data:/var/lib/barman
+      - ./reports:/var/lib/barman/pgbadger-reports
+      - barman_backup:/data/pg-backup
+      - ./configs/barman.conf:/etc/barman.conf:ro
+      - ./ssh_keys/barman_rsa.pub:/ssh_keys/barman_rsa.pub:ro
+      - ./ssh_keys/barman_rsa:/home/barman/.ssh/barman_rsa:ro
+      - ./ssh_keys/barman_rsa.pub:/home/barman/.ssh/barman_rsa.pub:ro
+    networks:
+      - patroni_network
+    depends_on:
+      - db1
+      - db2
+      - db3
+      - db4
+
+  # HAProxy load balancer
+  haproxy:
+    image: haproxy:2.8
+    container_name: haproxy
+    hostname: haproxy
+    ports:
+      - "${HAPROXY_WRITE_PORT}:5431"  # Write endpoint (leader only)
+      - "${HAPROXY_READ_PORT}:5432"  # Read endpoint (replicas)
+      - "${HAPROXY_STATS_PORT}:8404"  # Stats
+    volumes:
+      - ./configs/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks:
+      - patroni_network
+    depends_on:
+      - db1
+      - db2
+      - db3
+      - db4
+    restart: unless-stopped
+
+networks:
+  patroni_network:
+    driver: bridge
+
+volumes:
+  etcd1_data:
+  etcd2_data:
+  db1_data:
+  db2_data:
+  db3_data:
+  db4_data:
+  barman_data:
+  barman_backup:

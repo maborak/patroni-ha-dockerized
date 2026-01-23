@@ -1,0 +1,13 @@
+# SSH keys (should not be committed)
+*.pem
+*.key
+*.rsa
+*.rsa.pub
+
+# Docker volumes
+*.log
+
+# Environment files with secrets
+.env
+.env.local
+.env.*.local

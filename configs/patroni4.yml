@@ -1,0 +1,179 @@
+scope: patroni1
+name: db4
+namespace: /patroni1
+retry_timeout: 10
+
+restapi:
+  listen: 0.0.0.0:8001
+  connect_address: db4:8001
+
+etcd3:
+  hosts: etcd1:2379,etcd2:2379
+
+bootstrap:
+  method: initdb
+  dcs:
+    ttl: 30
+    loop_wait: 10
+    retry_timeout: 10
+    maximum_lag_on_failover: 1048576
+    master_start_timeout: 300
+    synchronous_mode: false
+    synchronous_mode_strict: false
+    synchronous_node_count: 1
+    postgresql:
+      use_pg_rewind: true
+      use_slots: true
+      parameters:
+        # Connection Settings
+        max_connections: 500
+        superuser_reserved_connections: 5
+        
+        # Memory Settings (optimized for ~4-8GB container)
+        shared_buffers: 2GB                    # 25% of available RAM (for 8GB container)
+        effective_cache_size: 6GB             # 75% of available RAM
+        work_mem: 16MB                         # (effective_cache_size - shared_buffers) / (max_connections * 3)
+        maintenance_work_mem: 512MB            # For VACUUM, CREATE INDEX operations
+        temp_buffers: 8MB                      # Temporary table buffers
+        
+        # WAL Settings
+        wal_level: replica
+        min_wal_size: 2GB
+        max_wal_size: 8GB
+        wal_buffers: 32MB
+        wal_keep_size: 2GB
+        wal_compression: on
+        wal_log_hints: on
+        
+        # Checkpoint Settings
+        checkpoint_timeout: 15min
+        checkpoint_completion_target: 0.9
+        checkpoint_warning: 5min
+        
+        # Query Planner
+        default_statistics_target: 1000
+        random_page_cost: 1.1                 # Optimized for SSD storage
+        seq_page_cost: 1
+        effective_io_concurrency: 200         # Optimized for SSD
+        cpu_tuple_cost: 0.01
+        cpu_index_tuple_cost: 0.005
+        cpu_operator_cost: 0.0025
+        
+        # Parallel Query Settings
+        max_worker_processes: 8               # Typically 2x CPU cores
+        max_parallel_workers_per_gather: 4     # Parallel workers per query
+        max_parallel_workers: 8                # Total parallel workers
+        max_parallel_maintenance_workers: 4    # For parallel VACUUM, CREATE INDEX
+        parallel_tuple_cost: 0.1
+        parallel_setup_cost: 1000.0
+        
+        # Replication Settings
+        max_wal_senders: 10
+        max_replication_slots: 10
+        hot_standby: on
+        hot_standby_feedback: on               # Reduces query conflicts on replicas
+        max_standby_streaming_delay: 30s       # Allow some delay for queries
+        
+        # Autovacuum Settings
+        autovacuum: on
+        autovacuum_max_workers: 5
+        autovacuum_naptime: 1s
+        autovacuum_vacuum_threshold: 50
+        autovacuum_analyze_threshold: 50
+        autovacuum_vacuum_scale_factor: 0.01
+        autovacuum_analyze_scale_factor: 0.01
+        autovacuum_vacuum_cost_delay: 2ms
+        autovacuum_vacuum_cost_limit: 500
+        
+        # Background Writer
+        bgwriter_delay: 200ms
+        bgwriter_lru_maxpages: 100
+        bgwriter_lru_multiplier: 2.0
+        
+        # Lock Management
+        max_locks_per_transaction: 512
+        max_prepared_transactions: 0
+        
+        # Logging and Monitoring (JSON format)
+        logging_collector: on                  # Enable logging collector
+        log_destination: 'stderr,jsonlog'       # JSON logging to stderr
+        log_directory: '/var/log/postgresql'    # Log directory
+        # Note: When using jsonlog, PostgreSQL automatically appends .json to the filename
+        # So we don't include .json in log_filename to avoid double extension (.json.json)
+        log_filename: 'postgresql-%Y-%m-%d_%H%M%S'  # Log filename with timestamp (no .json extension)
+        log_rotation_age: 1d                    # Rotate logs daily
+        log_rotation_size: 0                    # No size-based rotation (use age only)
+        log_truncate_on_rotation: on           # Truncate on rotation
+        log_line_prefix: '%t [%p-%l] %r %q%u@%d '  # Log line prefix
+        log_checkpoints: on
+        log_connections: on                    # Log all connections
+        log_disconnections: on                  # Log all disconnections
+        log_lock_waits: on
+        log_temp_files: 0                      # Log all temp files
+        log_autovacuum_min_duration: 0          # Log all autovacuum operations
+        log_min_duration_statement: 0           # Log all statements (0 = log everything)
+        log_statement: 'all'                    # Log all statements (DDL, DML, etc.)
+        log_duration: on                        # Log query duration
+        log_hostname: on                        # Include hostname in logs
+        log_timezone: 'UTC'                     # Use UTC timezone
+        
+        # Performance
+        jit: on                                 # Just-In-Time compilation for complex queries
+        shared_preload_libraries: 'pg_stat_statements'
+        track_activity_query_size: 2048
+        pg_stat_statements.track: all
+        
+        # Security
+        password_encryption: scram-sha-256
+        
+        # System Resources
+        huge_pages: try
+        max_files_per_process: 4096
+        
+        # Commit Settings
+        synchronous_commit: on                 # Can be set to 'remote_write' for better performance if acceptable
+        commit_delay: 0
+        commit_siblings: 5
+      pg_hba:
+        - local all postgres peer
+        - host all all 127.0.0.1/32 trust
+        - host replication replicator 127.0.0.1/32 scram-sha-256
+        - host all all 0.0.0.0/0 scram-sha-256
+        - host replication replicator 0.0.0.0/0 scram-sha-256
+      initdb:
+        - encoding: UTF8
+        - data-checksums
+        - locale: en_US.UTF-8
+  post_bootstrap: /etc/patroni/scripts/create_databases.sh
+
+postgresql:
+  listen: 0.0.0.0:5431
+  connect_address: db4:5431
+  use_unix_socket: true
+  data_dir: /var/lib/postgresql/15/patroni1
+  bin_dir: /usr/lib/postgresql/15/bin
+  config_dir: /var/lib/postgresql/15/patroni1
+  pgpass: /var/lib/postgresql/.pgpass_patroni
+  parameters:
+    unix_socket_directories: /var/run/postgresql
+    archive_mode: on
+    archive_command: "/bin/bash -c 'HOSTNAME=$(/bin/hostname); if [ -n \"$(/usr/local/bin/patronictl -c /etc/patroni/patroni.yml list -e 2>/dev/null | /bin/grep -w \"$HOSTNAME\" | /bin/grep -w \"Leader\" | /bin/grep -w \"running\")\" ]; then /usr/bin/rsync -e \"ssh -i /home/postgres/.ssh/barman_rsa -p 22 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null\" -a %p barman@barman:/data/pg-backup/$HOSTNAME/incoming/%f && echo \"$(/bin/date +\"%Y-%m-%d %H:%M:%S\") - Archived: %f\" >> /var/log/postgresql/archive.log 2>&1; else echo \"$(/bin/date +\"%Y-%m-%d %H:%M:%S\") - Not the leader or not running, skipping archive\" >> /var/log/postgresql/archive.log 2>&1; fi'"
+  authentication:
+    replication:
+      username: replicator
+      password: Dgo7cQ41WDTnd89G46TgfVtr
+    superuser:
+      username: postgres
+      password: Dgo7cQ41WDTnd89G46TgfVtr
+  create_replica_methods:
+    - basebackup
+  basebackup:
+    max-rate: '100M'
+    checkpoint: 'fast'
+
+tags:
+  nofailover: false
+  noloadbalance: false
+  clonefrom: false
+  nosync: false
+
