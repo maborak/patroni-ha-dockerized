@@ -35,10 +35,11 @@ RUN ssh-keygen -A && \
     echo "StrictModes no" >> /etc/ssh/sshd_config && \
     echo "LogLevel INFO" >> /etc/ssh/sshd_config
 
-# Copy entrypoint script and supervisor config
+# Copy entrypoint script, supervisor config, and critical scripts
 COPY entrypoint.sh /entrypoint.sh
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
-RUN chmod +x /entrypoint.sh
+COPY create_databases.sh /etc/patroni/create_databases.sh
+RUN chmod +x /entrypoint.sh /etc/patroni/create_databases.sh
 
 # Set working directory
 WORKDIR /var/lib/postgresql

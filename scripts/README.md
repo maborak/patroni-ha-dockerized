@@ -1,41 +1,58 @@
 # Scripts Directory Documentation
 
-This directory contains operational tooling for the Patroni HA + Barman stack. Scripts are currently organized flatly but serve distinct purposes.
+This directory contains operational tooling for the Patroni HA + Barman stack, organized by purpose.
 
-## Script Classification (Proposed)
+## Directory Structure
 
-For better organization, scripts can be categorized as follows:
-
-### Proposed Structure
+Scripts are organized into logical categories:
 
 ```
 scripts/
 ├── ops/              # Lifecycle & HA operations
-│   ├── check_replica.sh
-│   └── (future: switchover.sh, failover.sh)
+│   └── check_replica.sh
 ├── backup/           # Barman / backup tasks
-│   ├── check_archive_command.sh
-│   └── (future: backup_schedule.sh)
+│   └── check_archive_command.sh
 ├── pitr/             # PITR workflows
-│   └── perform_pitr.sh  ⭐ (DO NOT MOVE - critical script)
+│   ├── perform_pitr.sh  ⭐ (critical script)
+│   └── monitor_recovery.sh
 ├── debug/            # Diagnostics & inspection
 │   ├── get_stack_info.sh
 │   ├── pg_activity_monitor.sh
 │   ├── pg_stat_statements_query.sh
 │   ├── pgmetrics_collect.sh
-│   └── count_database_stats.sh
-└── utils/            # Helpers
-    ├── setup_ssh_keys.sh
-    ├── test_ssh_to_barman.sh
-    ├── test_barman_ssh_to_patroni.sh
-    └── test_barman_postgres_connectivity.sh
+│   ├── count_database_stats.sh
+│   └── monitor_analyze.sh
+├── utils/            # Helpers
+│   ├── setup_ssh_keys.sh
+│   └── (create_databases.sh moved to patroni/ - critical Patroni script)
+│   ├── test_ssh_to_barman.sh
+│   ├── test_barman_ssh_to_patroni.sh
+│   └── test_barman_postgres_connectivity.sh
+├── maintenance/      # Maintenance tasks
+│   ├── vacuum_optimize.sh
+│   ├── generate_pgbadger_report.sh
+│   └── import_external_database.sh
+└── testing/          # Testing & stress testing
+    ├── stress_test_db.sh
+    ├── stress_test_db.py
+    ├── cleanup_stress_test.sh
+    └── README_stress_test.md
 ```
 
-**Backward Compatibility**: Scripts remain in current location. Proposed organization is optional refactoring. If moving scripts:
-- Keep original files as symlinks, OR
-- Add wrapper scripts that call new locations
+## Script Paths
 
-**Recommendation**: Keep current structure for now. Document scripts here instead of reorganizing.
+**Use the organized paths directly:**
+
+- `bash scripts/pitr/perform_pitr.sh ...`
+- `bash scripts/debug/get_stack_info.sh ...`
+- `bash scripts/utils/setup_ssh_keys.sh ...`
+- `create_databases.sh` is now in `patroni/` directory (built into image)
+- `bash scripts/debug/count_database_stats.sh ...`
+- `bash scripts/debug/monitor_analyze.sh ...`
+- `bash scripts/pitr/monitor_recovery.sh ...`
+- `bash scripts/testing/cleanup_stress_test.sh ...`
+
+**Note**: Old flat paths (e.g., `scripts/perform_pitr.sh`) are no longer available. Update any references to use the new organized paths.
 
 ---
 
@@ -60,7 +77,7 @@ scripts/
 **Example Usage**:
 ```bash
 # Automated PITR (recommended)
-bash scripts/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' \
+bash scripts/pitr/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' \
   --server db1 \
   --target db2 \
   --restore \
@@ -68,7 +85,7 @@ bash scripts/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' \
   --auto-start
 
 # Manual PITR (for learning)
-bash scripts/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' --server db1
+bash scripts/pitr/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' --server db1
 ```
 
 **Expected Outcome**: 
@@ -153,10 +170,10 @@ bash scripts/check_archive_command.sh
 **Example Usage**:
 ```bash
 # Human-readable output
-bash scripts/get_stack_info.sh --human
+bash scripts/debug/get_stack_info.sh --human
 
 # JSON output (for automation)
-bash scripts/get_stack_info.sh --json
+bash scripts/debug/get_stack_info.sh --json
 ```
 
 **Expected Outcome**: 
@@ -275,10 +292,10 @@ bash scripts/pgmetrics_collect.sh --format json --output-dir ./reports
 **Example Usage**:
 ```bash
 # Count stats on leader
-bash scripts/count_database_stats.sh
+bash scripts/debug/count_database_stats.sh
 
 # Target specific node
-bash scripts/count_database_stats.sh db2
+bash scripts/debug/count_database_stats.sh db2
 ```
 
 **Expected Outcome**: Table counts, row counts, database size
@@ -301,10 +318,10 @@ bash scripts/count_database_stats.sh db2
 **Example Usage**:
 ```bash
 # Monitor leader
-bash scripts/monitor_analyze.sh
+bash scripts/debug/monitor_analyze.sh
 
 # Target specific node
-bash scripts/monitor_analyze.sh db2
+bash scripts/debug/monitor_analyze.sh db2
 ```
 
 **Expected Outcome**: Real-time progress of ANALYZE operations
@@ -327,7 +344,7 @@ bash scripts/monitor_analyze.sh db2
 **Example Usage**:
 ```bash
 # Monitor recovery on db2
-bash scripts/monitor_recovery.sh db2
+bash scripts/pitr/monitor_recovery.sh db2
 ```
 
 **Expected Outcome**: Recovery LSN progress, time remaining estimates
@@ -498,7 +515,7 @@ bash scripts/import_external_database.sh /path/to/dump.sql
 
 ---
 
-#### `create_databases.sh`
+#### `create_databases.sh` (MOVED)
 
 **Purpose**: Create databases and users (called by Patroni post_bootstrap).
 
@@ -508,7 +525,11 @@ bash scripts/import_external_database.sh /path/to/dump.sql
 
 **Example Usage**: Not called directly - part of Patroni bootstrap
 
+**Location**: `patroni/create_databases.sh` (built into Patroni Docker image at `/etc/patroni/create_databases.sh`)
+
 **Expected Outcome**: Default database created
+
+**Note**: This critical script has been moved to `patroni/` directory and is built into the Docker image, ensuring it's always available.
 
 ---
 
@@ -579,7 +600,7 @@ bash scripts/cleanup_stress_test.sh
 
 **Example Usage**:
 ```bash
-bash scripts/setup_ssh_keys.sh
+bash scripts/utils/setup_ssh_keys.sh
 ```
 
 **Expected Outcome**: 
@@ -591,6 +612,27 @@ bash scripts/setup_ssh_keys.sh
 - Keys already exist → Script reports and exits
 
 **Note**: Keys are mounted into containers via `docker-compose.yml`
+
+---
+
+#### `create_databases.sh`
+
+**Purpose**: Create default database after Patroni bootstrap (called by Patroni post_bootstrap hook).
+
+**When to use**: Automatically called during cluster initialization by Patroni.
+
+**Prerequisites**: Patroni bootstrap process, PostgreSQL running
+
+**Example Usage**: Not called directly - part of Patroni bootstrap workflow
+
+**Expected Outcome**: Default database (`maborak` by default) created if it doesn't exist
+
+**Configuration**: 
+- Database name set via `DEFAULT_DATABASE` environment variable in `docker-compose.yml`
+- Script is built into Patroni image at `/etc/patroni/create_databases.sh`
+- Referenced in `configs/patroni*.yml` as `post_bootstrap: /etc/patroni/create_databases.sh`
+
+**Location**: `patroni/create_databases.sh` (critical Patroni script, built into image)
 
 ---
 
@@ -656,27 +698,23 @@ When adding new scripts:
 
 ---
 
-## Migration Path (If Reorganizing)
+## Script Organization Complete ✅
 
-If you choose to reorganize scripts into subdirectories:
+Scripts have been organized into the structure above. All scripts must be accessed via their organized paths.
 
-**Option 1: Symlinks (Recommended)**
+**Use organized paths:**
 ```bash
-mkdir -p scripts/{ops,backup,pitr,debug,utils}
-mv scripts/perform_pitr.sh scripts/pitr/
-ln -s ../pitr/perform_pitr.sh scripts/perform_pitr.sh
+# PITR
+bash scripts/pitr/perform_pitr.sh ...
+
+# Debugging
+bash scripts/debug/get_stack_info.sh --human
+
+# Testing
+bash scripts/testing/stress_test_db.sh
+
+# Utilities
+bash scripts/utils/setup_ssh_keys.sh
 ```
 
-**Option 2: Wrapper Scripts**
-```bash
-# scripts/perform_pitr.sh becomes:
-#!/bin/bash
-exec "$(dirname "$0")/pitr/perform_pitr.sh" "$@"
-```
-
-**Option 3: Keep Current Structure**
-- Simplest approach
-- All scripts remain accessible
-- No breaking changes
-
-**Recommendation**: Keep current structure. Documentation (this file) provides organization without filesystem changes.
+**Note**: Old flat paths (e.g., `scripts/perform_pitr.sh`) are no longer available. Update all references to use the new organized paths.

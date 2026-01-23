@@ -62,7 +62,7 @@ else
     # Final fallback
     if [ -z "$DEFAULT_NODE" ]; then
         echo -e "${YELLOW}⚠ Warning: Could not detect leader, defaulting to db1${NC}" >&2
-        echo -e "${CYAN}  Tip: Specify node manually: bash scripts/monitor_analyze.sh db3${NC}" >&2
+        echo -e "${CYAN}  Tip: Specify node manually: bash scripts/debug/monitor_analyze.sh db3${NC}" >&2
         DEFAULT_NODE="db1"
     fi
     echo "" >&2
@@ -87,7 +87,7 @@ echo ""
 echo -e "${CYAN}Monitor Settings:${NC}"
 echo -e "  ${BOLD}Refresh interval:${NC} ${REFRESH_INTERVAL} seconds"
 echo -e "  ${BOLD}Press Ctrl+C to stop monitoring${NC}"
-echo -e "  ${CYAN}Tip:${NC} To monitor a specific node: bash scripts/monitor_analyze.sh <node> <interval>"
+echo -e "  ${CYAN}Tip:${NC} To monitor a specific node: bash scripts/debug/monitor_analyze.sh <node> <interval>"
 echo ""
 
 # Check if pg_stat_progress_analyze exists

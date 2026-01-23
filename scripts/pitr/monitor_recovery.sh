@@ -62,7 +62,7 @@ else
     # Final fallback
     if [ -z "$DEFAULT_NODE" ]; then
         echo -e "${YELLOW}⚠ Warning: Could not detect leader, defaulting to db1${NC}" >&2
-        echo -e "${CYAN}  Tip: Specify node manually: bash scripts/monitor_recovery.sh db2${NC}" >&2
+        echo -e "${CYAN}  Tip: Specify node manually: bash scripts/pitr/monitor_recovery.sh db2${NC}" >&2
         DEFAULT_NODE="db1"
     fi
     echo "" >&2
@@ -92,7 +92,7 @@ echo -e "${CYAN}Monitor Settings:${NC}"
 echo -e "  ${BOLD}Refresh interval:${NC} ${REFRESH_INTERVAL} seconds"
 echo -e "  ${BOLD}Press Ctrl+C to stop monitoring${NC}"
 if [ -z "$1" ]; then
-    echo -e "  ${CYAN}Tip:${NC} To monitor a specific node (e.g., after PITR): bash scripts/monitor_recovery.sh <node> <interval>"
+    echo -e "  ${CYAN}Tip:${NC} To monitor a specific node (e.g., after PITR): bash scripts/pitr/monitor_recovery.sh <node> <interval>"
 fi
 echo ""
 
@@ -123,7 +123,7 @@ while true; do
         echo -e "  docker exec ${DEFAULT_NODE} psql -U postgres -d ${DEFAULT_DATABASE} -p 5431 -h localhost -c \"ANALYZE;\""
         echo ""
         echo -e "${CYAN}Or run the statistics script:${NC}"
-        echo -e "  bash scripts/count_database_stats.sh"
+        echo -e "  bash scripts/debug/count_database_stats.sh"
         echo ""
         break
     else

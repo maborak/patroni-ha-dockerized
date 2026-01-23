@@ -133,7 +133,7 @@ TOTAL_SIZE_ALL=0
 IS_RECOVERY=$(run_query_postgres "SELECT pg_is_in_recovery();")
 if [ "$IS_RECOVERY" = "f" ] || [ "$IS_RECOVERY" = "false" ]; then
     echo -e "${YELLOW}Updating statistics for all databases (this may take a moment)...${NC}"
-    echo -e "${CYAN}Note: Run 'bash scripts/monitor_analyze.sh' in another terminal to see progress${NC}"
+    echo -e "${CYAN}Note: Run 'bash scripts/debug/monitor_analyze.sh' in another terminal to see progress${NC}"
     echo ""
     # Run ANALYZE on all databases
     for db in $DATABASES; do

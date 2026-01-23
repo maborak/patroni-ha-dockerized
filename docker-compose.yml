@@ -72,7 +72,7 @@ services:
       - db1_data:/var/lib/postgresql
       - ./configs/patroni1.yml:/etc/patroni/patroni.yml:ro
       - ./scripts:/etc/patroni/scripts:ro
-      - ./ssh_keys/barman_rsa:/home/postgres/.ssh/barman_rsa:ro
+      - ./ssh_keys/barman_rsa:/ssh_keys/barman_rsa:ro
       - ./ssh_keys/barman_rsa.pub:/ssh_keys/barman_rsa.pub:ro
 
   db2:
@@ -88,7 +88,7 @@ services:
       - db2_data:/var/lib/postgresql
       - ./configs/patroni2.yml:/etc/patroni/patroni.yml:ro
       - ./scripts:/etc/patroni/scripts:ro
-      - ./ssh_keys/barman_rsa:/home/postgres/.ssh/barman_rsa:ro
+      - ./ssh_keys/barman_rsa:/ssh_keys/barman_rsa:ro
       - ./ssh_keys/barman_rsa.pub:/ssh_keys/barman_rsa.pub:ro
 
   db3:
@@ -104,7 +104,7 @@ services:
       - db3_data:/var/lib/postgresql
       - ./configs/patroni3.yml:/etc/patroni/patroni.yml:ro
       - ./scripts:/etc/patroni/scripts:ro
-      - ./ssh_keys/barman_rsa:/home/postgres/.ssh/barman_rsa:ro
+      - ./ssh_keys/barman_rsa:/ssh_keys/barman_rsa:ro
       - ./ssh_keys/barman_rsa.pub:/ssh_keys/barman_rsa.pub:ro
 
   db4:
@@ -120,7 +120,7 @@ services:
       - db4_data:/var/lib/postgresql
       - ./configs/patroni4.yml:/etc/patroni/patroni.yml:ro
       - ./scripts:/etc/patroni/scripts:ro
-      - ./ssh_keys/barman_rsa:/home/postgres/.ssh/barman_rsa:ro
+      - ./ssh_keys/barman_rsa:/ssh_keys/barman_rsa:ro
       - ./ssh_keys/barman_rsa.pub:/ssh_keys/barman_rsa.pub:ro
 
   # Barman backup server
@@ -140,9 +140,8 @@ services:
       - ./reports:/var/lib/barman/pgbadger-reports
       - barman_backup:/data/pg-backup
       - ./configs/barman.conf:/etc/barman.conf:ro
+      - ./ssh_keys/barman_rsa:/ssh_keys/barman_rsa:ro
       - ./ssh_keys/barman_rsa.pub:/ssh_keys/barman_rsa.pub:ro
-      - ./ssh_keys/barman_rsa:/home/barman/.ssh/barman_rsa:ro
-      - ./ssh_keys/barman_rsa.pub:/home/barman/.ssh/barman_rsa.pub:ro
     networks:
       - patroni_network
     depends_on:

@@ -302,5 +302,5 @@ echo -e "To clean up the test data, run:"
 echo -e "  ${YELLOW}PGPASSWORD=\"${DB_PASSWORD}\" psql -h ${DB_HOST_IP} -p ${DB_PORT} -U ${DB_USER} -d ${DB_NAME} -c \"DROP TABLE IF EXISTS stress_table_001, stress_table_002, ... CASCADE;\"${NC}"
 echo ""
 echo -e "Or use the cleanup script:"
-echo -e "  ${YELLOW}./scripts/cleanup_stress_test.sh${NC}"
+echo -e "  ${YELLOW}./scripts/testing/cleanup_stress_test.sh${NC}"
 

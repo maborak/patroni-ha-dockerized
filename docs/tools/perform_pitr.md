@@ -1,6 +1,6 @@
 # perform_pitr.sh - Complete Reference
 
-**File**: `scripts/perform_pitr.sh`  
+**File**: `scripts/pitr/perform_pitr.sh`  
 **Status**: ✅ **DO NOT MODIFY** - This script is production-tested and must remain unchanged.
 
 ---
@@ -32,7 +32,7 @@ The script orchestrates:
 ## Synopsis
 
 ```bash
-bash scripts/perform_pitr.sh <backup-id> <target-time> [OPTIONS]
+bash scripts/pitr/perform_pitr.sh <backup-id> <target-time> [OPTIONS]
 ```
 
 ### Positional Arguments
@@ -63,7 +63,7 @@ bash scripts/perform_pitr.sh <backup-id> <target-time> [OPTIONS]
 docker exec barman barman list-backup db1
 
 # Perform PITR (creates recovery files, shows instructions)
-bash scripts/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' --server db1
+bash scripts/pitr/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' --server db1
 ```
 
 **Output**: Recovery files created, manual steps printed.
@@ -73,7 +73,7 @@ bash scripts/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' --server db1
 ### Automated PITR (Recommended)
 
 ```bash
-bash scripts/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' \
+bash scripts/pitr/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' \
   --server db1 \
   --target db2 \
   --restore \
@@ -98,7 +98,7 @@ bash scripts/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' \
 ### Automated PITR with Cluster Reintegration
 
 ```bash
-bash scripts/perform_pitr.sh 20260123T120000 latest \
+bash scripts/pitr/perform_pitr.sh 20260123T120000 latest \
   --server db1 \
   --target db2 \
   --restore \
@@ -124,7 +124,7 @@ bash scripts/perform_pitr.sh 20260123T120000 latest \
 BACKUP_ID=$(docker exec barman barman list-backup db1 | head -2 | tail -1 | awk '{print $2}')
 
 # Perform PITR to latest
-bash scripts/perform_pitr.sh $BACKUP_ID latest \
+bash scripts/pitr/perform_pitr.sh $BACKUP_ID latest \
   --server db1 \
   --target db2 \
   --restore \
@@ -211,7 +211,7 @@ Recovery completed at 2026-01-23 12:30:00
 
 ```bash
 # DELETE occurred at 12:30:00, recover to 12:29:59
-bash scripts/perform_pitr.sh 20260123T120000 '2026-01-23 12:29:59' \
+bash scripts/pitr/perform_pitr.sh 20260123T120000 '2026-01-23 12:29:59' \
   --server db1 \
   --target db2 \
   --restore \
@@ -239,7 +239,7 @@ docker exec db2 psql -U postgres -d maborak -c "SELECT COUNT(*) FROM deleted_tab
 
 ```bash
 # Step 1: Create recovery files only
-bash scripts/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' --server db1
+bash scripts/pitr/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' --server db1
 
 # Script outputs:
 # - Recovery files location
@@ -332,7 +332,7 @@ docker exec barman barman list-backup db1
 
 **Example**:
 ```bash
-bash scripts/perform_pitr.sh 20260123T120000 latest --server db1 --target db2 --restore
+bash scripts/pitr/perform_pitr.sh 20260123T120000 latest --server db1 --target db2 --restore
 ```
 
 ---
@@ -356,7 +356,7 @@ bash scripts/perform_pitr.sh 20260123T120000 latest --server db1 --target db2 --
 
 **Example**:
 ```bash
-bash scripts/perform_pitr.sh 20260123T120000 latest --server db1 --target db2 --restore
+bash scripts/pitr/perform_pitr.sh 20260123T120000 latest --server db1 --target db2 --restore
 ```
 
 ---
@@ -376,7 +376,7 @@ bash scripts/perform_pitr.sh 20260123T120000 latest --server db1 --target db2 --
 
 **Example**:
 ```bash
-bash scripts/perform_pitr.sh 20260123T120000 latest --server db1 --target db2 --restore
+bash scripts/pitr/perform_pitr.sh 20260123T120000 latest --server db1 --target db2 --restore
 ```
 
 **Note**: Without `--target`, this flag has no effect (no node to start on).
@@ -400,7 +400,7 @@ bash scripts/perform_pitr.sh 20260123T120000 latest --server db1 --target db2 --
 
 **Example**:
 ```bash
-bash scripts/perform_pitr.sh 20260123T120000 latest \
+bash scripts/pitr/perform_pitr.sh 20260123T120000 latest \
   --server db1 --target db2 --restore \
   --wal-method barman-get-wal
 ```
@@ -427,7 +427,7 @@ bash scripts/perform_pitr.sh 20260123T120000 latest \
 
 **Example**:
 ```bash
-bash scripts/perform_pitr.sh 20260123T120000 latest \
+bash scripts/pitr/perform_pitr.sh 20260123T120000 latest \
   --server db1 --target db2 --restore --auto-start
 ```
 
@@ -445,7 +445,7 @@ bash scripts/perform_pitr.sh 20260123T120000 latest \
 
 **Usage**:
 ```bash
-PATRONI_CLUSTER_NAME=mycluster bash scripts/perform_pitr.sh ...
+PATRONI_CLUSTER_NAME=mycluster bash scripts/pitr/perform_pitr.sh ...
 ```
 
 **When needed**: If using non-default cluster name in Patroni configs.
@@ -778,7 +778,7 @@ The script assumes:
 
 ```bash
 BACKUP_ID=$(docker exec barman barman list-backup db1 | head -2 | tail -1 | awk '{print $2}')
-bash scripts/perform_pitr.sh $BACKUP_ID latest --server db1 --target db2 --restore --auto-start
+bash scripts/pitr/perform_pitr.sh $BACKUP_ID latest --server db1 --target db2 --restore --auto-start
 ```
 
 **Use when**: Need quick recovery, exact time not critical.
@@ -788,7 +788,7 @@ bash scripts/perform_pitr.sh $BACKUP_ID latest --server db1 --target db2 --resto
 ### Pattern 2: Precise Time Recovery
 
 ```bash
-bash scripts/perform_pitr.sh 20260123T120000 '2026-01-23 12:29:59.500000' \
+bash scripts/pitr/perform_pitr.sh 20260123T120000 '2026-01-23 12:29:59.500000' \
   --server db1 --target db2 --restore --wal-method barman-wal-restore
 ```
 
@@ -800,7 +800,7 @@ bash scripts/perform_pitr.sh 20260123T120000 '2026-01-23 12:29:59.500000' \
 
 ```bash
 # Create recovery files
-bash scripts/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' --server db1
+bash scripts/pitr/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' --server db1
 
 # Follow printed instructions to apply manually
 # (Gives you control over each step)
@@ -862,7 +862,7 @@ docker exec db2 supervisorctl start patroni
 docker exec barman rm -rf /tmp/pitr_recovery_*
 
 # Re-run script
-bash scripts/perform_pitr.sh <backup-id> <target-time> --server db1 --target db2 --restore
+bash scripts/pitr/perform_pitr.sh <backup-id> <target-time> --server db1 --target db2 --restore
 ```
 
 ---
@@ -895,5 +895,5 @@ The script automatically configures `restore_command` based on `--wal-method`. F
 2. Review script output (detailed error messages)
 3. Check logs: `docker logs db2` and `docker exec barman tail /var/log/barman/barman.log`
 
-**Script Location**: `scripts/perform_pitr.sh`  
+**Script Location**: `scripts/pitr/perform_pitr.sh`  
 **Do NOT modify** - Script is production-tested and stable.

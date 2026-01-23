@@ -408,7 +408,7 @@ TARGET_NODE="db2"
 
 **4. Perform PITR (Automated - Recommended):**
 ```bash
-bash scripts/perform_pitr.sh $BACKUP_ID '2026-01-23 12:30:00' \
+bash scripts/pitr/perform_pitr.sh $BACKUP_ID '2026-01-23 12:30:00' \
   --server db1 \
   --target $TARGET_NODE \
   --restore \
@@ -439,7 +439,7 @@ docker exec $TARGET_NODE patronictl -c /etc/patroni/patroni.yml list
 docker exec $TARGET_NODE psql -U postgres -c "SELECT pg_is_in_recovery();"
 
 # Data verification
-bash scripts/count_database_stats.sh $TARGET_NODE
+bash scripts/debug/count_database_stats.sh $TARGET_NODE
 
 # Cluster status
 docker exec $TARGET_NODE patronictl -c /etc/patroni/patroni.yml list
@@ -653,7 +653,7 @@ docker exec barman barman status $LEADER
 ./check_stack.sh
 
 # Detailed stack info
-bash scripts/get_stack_info.sh --human
+bash scripts/debug/get_stack_info.sh --human
 
 # Cluster status
 docker exec db1 patronictl -c /etc/patroni/patroni.yml list
@@ -723,7 +723,7 @@ docker exec barman barman status db1
 **Fix**:
 ```bash
 # Fix SSH keys if needed
-bash scripts/setup_ssh_keys.sh
+bash scripts/utils/setup_ssh_keys.sh
 
 # Restart PostgreSQL to retry archiving
 docker exec db1 supervisorctl restart patroni
@@ -780,7 +780,7 @@ check:
 
 health: check
 	@echo "=== Extended Health Check ==="
-	@bash scripts/get_stack_info.sh --human
+	@bash scripts/debug/get_stack_info.sh --human
 ```
 
 ### Patroni / HA
@@ -845,7 +845,7 @@ restore:
 		echo "Usage: make restore BACKUP_ID=xxx TARGET_TIME='2026-01-23 12:30:00' TARGET=db2"; \
 		exit 1; \
 	fi
-	@bash scripts/perform_pitr.sh $(BACKUP_ID) "$(TARGET_TIME)" \
+	@bash scripts/pitr/perform_pitr.sh $(BACKUP_ID) "$(TARGET_TIME)" \
 		--server $(SERVER) \
 		--target $(TARGET) \
 		--restore \
@@ -939,7 +939,7 @@ destroy:
 5. **If data is corrupted, restore from backup:**
    ```bash
    # See PITR runbook
-   bash scripts/perform_pitr.sh <backup-id> latest --server db1 --target db1 --restore
+   bash scripts/pitr/perform_pitr.sh <backup-id> latest --server db1 --target db1 --restore
    ```
 
 ---

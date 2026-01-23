@@ -21,7 +21,7 @@ echo ""
 # Check if SSH keys exist
 if [ ! -f "ssh_keys/barman_rsa" ] || [ ! -f "ssh_keys/barman_rsa.pub" ]; then
     echo -e "${RED}ERROR: SSH keys not found!${NC}"
-    echo "Please run: ./scripts/setup_ssh_keys.sh"
+    echo "Please run: ./scripts/utils/setup_ssh_keys.sh"
     exit 1
 fi
 

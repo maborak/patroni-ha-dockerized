@@ -22,7 +22,7 @@ This repository demonstrates a complete PostgreSQL HA stack suitable for learnin
 - **WAL Archiving**: Continuous WAL streaming from leader nodes via SSH/rsync
 - **WAL Processing**: Automatic WAL compression and organization
 - **Restore Drills**: Manual and automated recovery workflows
-- **PITR**: Point-In-Time Recovery to any timestamp (fully automated via `scripts/perform_pitr.sh`)
+- **PITR**: Point-In-Time Recovery to any timestamp (fully automated via `scripts/pitr/perform_pitr.sh`)
 
 **Status**: ✅ Fully implemented
 
@@ -527,7 +527,7 @@ docker exec barman ls -lh /data/pg-backup/db1/base/
 **Why it matters**: Recover from accidental DELETE, data corruption, or restore to specific state.
 
 **Implementation**:
-- **Script**: `scripts/perform_pitr.sh` (comprehensive automation)
+- **Script**: `scripts/pitr/perform_pitr.sh` (comprehensive automation)
 - **Methods**: 
   - Manual recovery (copy files, configure recovery)
   - Automated recovery (`--target` flag applies to node automatically)
@@ -535,14 +535,14 @@ docker exec barman ls -lh /data/pg-backup/db1/base/
 **Usage**:
 ```bash
 # Automated PITR (recommended)
-bash scripts/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' \
+bash scripts/pitr/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' \
   --server db1 \
   --target db2 \
   --restore \
   --wal-method barman-wal-restore
 
 # Manual PITR (for learning)
-bash scripts/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' --server db1
+bash scripts/pitr/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' --server db1
 # Then follow instructions printed by script
 ```
 
@@ -803,7 +803,7 @@ The `scripts/` directory contains valuable but currently unorganized tooling. Se
 
 **Critical scripts you'll use regularly:**
 
-1. **`scripts/perform_pitr.sh`** ⭐
+1. **`scripts/pitr/perform_pitr.sh`** ⭐
    - **Purpose**: Automated Point-In-Time Recovery
    - **When to use**: After accidental data loss, testing recovery procedures
    - **See**: `docs/tools/perform_pitr.md` for full documentation
@@ -813,7 +813,7 @@ The `scripts/` directory contains valuable but currently unorganized tooling. Se
    - **When to use**: After startup, before operations, troubleshooting
    - **See**: `docs/checks.md` for gap analysis and improvements
 
-3. **`scripts/get_stack_info.sh`**
+3. **`scripts/debug/get_stack_info.sh`**
    - **Purpose**: Detailed cluster information (JSON or human-readable)
    - **When to use**: Understanding current state, monitoring
 
@@ -976,7 +976,7 @@ docker exec db1 patronictl -c /etc/patroni/patroni.yml list
 docker exec barman barman backup db1
 
 # PITR
-bash scripts/perform_pitr.sh <backup-id> <target-time> --server db1 --target db2 --restore
+bash scripts/pitr/perform_pitr.sh <backup-id> <target-time> --server db1 --target db2 --restore
 
 # Switchover
 docker exec db1 patronictl -c /etc/patroni/patroni.yml switchover patroni1 --master db1 --candidate db2

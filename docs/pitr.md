@@ -2,7 +2,7 @@
 
 Complete guide for performing Point-In-Time Recovery with Barman in the Patroni HA cluster.
 
-**Status**: ✅ Fully implemented and automated via `scripts/perform_pitr.sh`
+**Status**: ✅ Fully implemented and automated via `scripts/pitr/perform_pitr.sh`
 
 ---
 
@@ -76,7 +76,7 @@ Point-In-Time Recovery allows you to restore a PostgreSQL database to any specif
 
 ```bash
 # Full automated PITR with cluster integration
-bash scripts/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' \
+bash scripts/pitr/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' \
   --server db1 \
   --target db2 \
   --restore \
@@ -115,7 +115,7 @@ bash scripts/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' \
 BACKUP_ID=$(docker exec barman barman list-backup db1 | head -2 | tail -1 | awk '{print $2}')
 
 # Perform PITR to latest
-bash scripts/perform_pitr.sh $BACKUP_ID latest \
+bash scripts/pitr/perform_pitr.sh $BACKUP_ID latest \
   --server db1 \
   --target db2 \
   --restore \
@@ -129,7 +129,7 @@ docker exec db2 psql -U postgres -c "SELECT pg_is_in_recovery();"
 # Should return 'f' (false)
 
 # Verify data
-bash scripts/count_database_stats.sh db2
+bash scripts/debug/count_database_stats.sh db2
 ```
 
 ---
@@ -149,7 +149,7 @@ bash scripts/count_database_stats.sh db2
 docker exec barman barman list-backup db1
 
 # Perform PITR
-bash scripts/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' \
+bash scripts/pitr/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' \
   --server db1 \
   --target db2 \
   --restore \
@@ -196,7 +196,7 @@ docker exec db2 psql -U postgres -d maborak -c "SELECT COUNT(*) FROM your_table;
 3. **Perform PITR to time just before DELETE:**
    ```bash
    # Recover to 1 second before DELETE
-   bash scripts/perform_pitr.sh 20260123T122500 '2026-01-23 12:29:59' \
+   bash scripts/pitr/perform_pitr.sh 20260123T122500 '2026-01-23 12:29:59' \
      --server db1 \
      --target db2 \
      --restore \
@@ -232,7 +232,7 @@ docker exec db2 psql -U postgres -d maborak -c "SELECT COUNT(*) FROM your_table;
 docker exec db2 supervisorctl stop patroni
 
 # Perform PITR
-bash scripts/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' \
+bash scripts/pitr/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' \
   --server db1 \
   --target db2 \
   --restore \
@@ -283,7 +283,7 @@ restore_command = 'barman-wal-restore -U barman barman db1 %f %p'
 
 **Usage**:
 ```bash
-bash scripts/perform_pitr.sh <backup-id> <target-time> \
+bash scripts/pitr/perform_pitr.sh <backup-id> <target-time> \
   --wal-method barman-wal-restore
 ```
 
@@ -310,7 +310,7 @@ restore_command = 'test -f %p || (umask 077; tmp="%p.tmp.$$"; ssh -o BatchMode=y
 
 **Usage**:
 ```bash
-bash scripts/perform_pitr.sh <backup-id> <target-time> \
+bash scripts/pitr/perform_pitr.sh <backup-id> <target-time> \
   --wal-method barman-get-wal
 ```
 
@@ -335,7 +335,7 @@ ERROR: Target time is before backup end time!
 docker exec barman barman show-backup db1 <backup-id> | grep "End time"
 
 # Use time after backup end, or use 'latest'
-bash scripts/perform_pitr.sh <backup-id> latest --server db1 --target db2 --restore
+bash scripts/pitr/perform_pitr.sh <backup-id> latest --server db1 --target db2 --restore
 ```
 
 ---
@@ -359,11 +359,11 @@ docker exec barman ls /data/pg-backup/db1/wals/*/ | sort
 **Solution**:
 ```bash
 # Use 'latest' instead of specific time
-bash scripts/perform_pitr.sh <backup-id> latest --server db1 --target db2 --restore
+bash scripts/pitr/perform_pitr.sh <backup-id> latest --server db1 --target db2 --restore
 
 # Or use backup end time (guaranteed to have WALs)
 BACKUP_END=$(docker exec barman barman show-backup db1 <backup-id> | grep "End time" | awk '{print $3, $4}')
-bash scripts/perform_pitr.sh <backup-id> "$BACKUP_END" --server db1 --target db2 --restore
+bash scripts/pitr/perform_pitr.sh <backup-id> "$BACKUP_END" --server db1 --target db2 --restore
 ```
 
 ---
@@ -445,7 +445,7 @@ docker exec db2 psql -U postgres -c "SHOW recovery_target_time;"
 **Solution**: Always use `--target` flag or stop Patroni first:
 ```bash
 # Automated (recommended)
-bash scripts/perform_pitr.sh ... --target db2 --restore
+bash scripts/pitr/perform_pitr.sh ... --target db2 --restore
 
 # Manual
 docker exec db1 supervisorctl stop patroni
@@ -494,7 +494,7 @@ docker exec barman barman show-server db1 | grep last_archived
 docker exec barman barman list-wals db1 | grep <missing-wal>
 
 # Use 'latest' if gaps cannot be resolved
-bash scripts/perform_pitr.sh <backup-id> latest --server db1 --target db2 --restore
+bash scripts/pitr/perform_pitr.sh <backup-id> latest --server db1 --target db2 --restore
 ```
 
 ---

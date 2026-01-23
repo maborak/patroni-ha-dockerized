@@ -5,7 +5,7 @@ Uses batch inserts, connection pooling, and parallel execution for maximum speed
 
 To use with conda environment:
     conda activate patroni
-    python3 scripts/stress_test_db.py
+    python3 scripts/testing/stress_test_db.py
 """
 
 import os
@@ -472,7 +472,7 @@ def main():
     print(f"{Colors.BLUE}{'='*40}{Colors.NC}")
     print()
     print("To clean up the test data, run:")
-    print(f"  {Colors.YELLOW}./scripts/cleanup_stress_test.sh{Colors.NC}")
+    print(f"  {Colors.YELLOW}./scripts/testing/cleanup_stress_test.sh{Colors.NC}")
     print()
     
     # Close connection pool

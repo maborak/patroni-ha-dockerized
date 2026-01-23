@@ -26,10 +26,10 @@ pip3 install psycopg2-binary
 
 ```bash
 # Basic usage (uses defaults from .env)
-python3 scripts/stress_test_db.py
+python3 scripts/testing/stress_test_db.py
 
 # Custom parameters
-python3 scripts/stress_test_db.py \
+python3 scripts/testing/stress_test_db.py \
   --tables 10 \
   --rows 10000 \
   --cols 20 \
@@ -37,7 +37,7 @@ python3 scripts/stress_test_db.py \
   --threads 8
 
 # Help
-python3 scripts/stress_test_db.py --help
+python3 scripts/testing/stress_test_db.py --help
 ```
 
 ### Performance Comparison

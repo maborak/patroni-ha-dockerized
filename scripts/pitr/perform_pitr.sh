@@ -27,6 +27,47 @@ cd "$SCRIPT_DIR/.."
 # Defaults to "patroni1" if not set
 PATRONI_CLUSTER_NAME="${PATRONI_CLUSTER_NAME:-patroni1}"
 
+# Simple numbered menu - reliable, no hanging, works everywhere
+# Usage: arrow_menu "Title" "Option1" "Option2" ... "OptionN"
+# Returns: selected index (0-based) via global variable ARROW_MENU_RESULT
+arrow_menu() {
+    local title="$1"
+    shift
+    local options=("$@")
+    local count=${#options[@]}
+    local choice
+    
+    # Display menu
+    echo -e "${CYAN}${title}${NC}"
+    echo ""
+    for ((i=0; i<count; i++)); do
+        echo -e "  ${GREEN}$((i+1))${NC}) ${options[$i]}"
+    done
+    echo ""
+    
+    # Read choice - simple and reliable, no terminal manipulation needed
+    while true; do
+        echo -ne "${YELLOW}Select option (1-$count) or 'q' to quit: ${NC}"
+        read -r choice
+        
+        # Handle quit
+        if [ "$choice" = "q" ] || [ "$choice" = "Q" ]; then
+            ARROW_MENU_RESULT=-1
+            echo ""
+            return 0
+        fi
+        
+        # Validate and convert to 0-based index
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "$count" ]; then
+            ARROW_MENU_RESULT=$((choice - 1))
+            echo ""
+            return 0
+        else
+            echo -e "${RED}Invalid selection. Please enter a number between 1 and $count, or 'q' to quit.${NC}"
+        fi
+    done
+}
+
 # Parse arguments
 AUTO_APPLY=false
 TARGET_NODE=""
@@ -79,44 +120,256 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Check required arguments
-if [ -z "$BACKUP_ID" ] || [ -z "$TARGET_TIME" ]; then
-    echo -e "${RED}Usage:${NC} $0 <backup-id> <target-time> [--server <server>] [--target <node>] [--restore] [--wal-method <method>]"
+# Interactive GUI mode if no arguments provided
+if [ -z "$BACKUP_ID" ] && [ -z "$TARGET_TIME" ] && [ $# -eq 0 ]; then
+    # Check if running in interactive terminal
+    if [ ! -t 0 ]; then
+        echo -e "${RED}Error: Interactive mode requires a terminal.${NC}"
+        echo "Usage: $0 <backup-id> <target-time> [options]"
+        exit 1
+    fi
+    
+    # Interactive GUI mode
+    echo -e "${BLUE}${BOLD}========================================${NC}"
+    echo -e "${BLUE}${BOLD}  Point-In-Time Recovery (PITR)${NC}"
+    echo -e "${BLUE}${BOLD}  Interactive Mode${NC}"
+    echo -e "${BLUE}${BOLD}========================================${NC}"
     echo ""
-    echo "Examples:"
-    echo "  $0 20260104T153446 '2026-01-04 15:45:00'"
-    echo "  $0 20260104T153446 '2026-01-04 15:45:00' --server db2"
-    echo "  $0 20260104T153446 '2026-01-04 15:45:00' --server db2 --target db1"
-    echo "  $0 20260104T153446 latest --server db2 --target db1 --restore"
-    echo "  $0 20260104T153446 latest --server db2 --target db1 --restore --wal-method barman-get-wal"
+    
+    # Function to collect backups from all servers
+    collect_backups() {
+        BACKUP_LIST=()
+        BACKUP_SERVERS=()
+        BACKUP_IDS=()
+        BACKUP_COUNT=0
+        
+        for server in db1 db2 db3 db4; do
+            # Get all backup lines (barman list-backup doesn't have a header, so don't skip lines)
+            BACKUPS=$(docker exec barman barman list-backup "$server" 2>/dev/null)
+            if [ -n "$BACKUPS" ]; then
+                # Read all lines, including the last one even if it doesn't end with newline
+                while IFS= read -r line || [ -n "$line" ]; do
+                    if [ -n "$line" ]; then
+                        # Use the raw barman output line as-is
+                        BACKUP_LIST+=("$line")
+                        # Extract server and backup ID for later use
+                        BACKUP_ID=$(echo "$line" | awk '{print $2}')
+                        BACKUP_SERVERS+=("$server")
+                        BACKUP_IDS+=("$BACKUP_ID")
+                        ((BACKUP_COUNT++))
+                    fi
+                done <<< "$BACKUPS"
+            fi
+        done
+    }
+    
+    # Step 1: Collect all backups from all servers
+    echo -e "${CYAN}Step 1: Loading backups...${NC}"
+    collect_backups
+    
+    if [ $BACKUP_COUNT -eq 0 ]; then
+        echo -e "${RED}No backups found!${NC}"
+        echo "Create a backup first with: make backup"
+        exit 1
+    fi
+    
+    echo -e "${GREEN}Found $BACKUP_COUNT backup(s)${NC}"
     echo ""
-    echo "Options:"
-    echo "  --server <server>  Server where the backup exists (db1, db2, db3, db4)"
-    echo "                     If not specified, will auto-detect by checking all servers"
-    echo "  --target <node>    Automatically apply PITR to specified node (db1, db2, db3, db4)"
-    echo "                     This will:"
-    echo "                     - Stop Patroni on target node"
-    echo "                     - Backup and replace data directory"
-    echo "                     - Stop other nodes"
-    echo "                     - Configure recovery settings"
-    echo "  --restore          Start PostgreSQL recovery automatically (only with --target)"
-    echo "                     If not specified, you must start PostgreSQL manually"
-    echo "  --auto-start       Automatically start PostgreSQL and monitor recovery progress"
-    echo "                     If not specified, recovery monitoring is skipped"
-    echo "  --wal-method <method>  Method to fetch WAL files (default: barman-wal-restore)"
-    echo "                        Options:"
-    echo "                        - barman-wal-restore: Use barman-wal-restore command (recommended)"
-    echo "                        - barman-get-wal: Use SSH with barman get-wal command"
+    
+    # Step 2: Select backup (with option to re-scan with 'r')
+    while true; do
+        echo -e "${CYAN}Step 2: Select backup${NC}"
+        echo ""
+        BACKUP_MENU_OPTIONS=("${BACKUP_LIST[@]}")
+        
+        # Display menu
+        echo -e "${CYAN}Select backup:${NC}"
+        echo ""
+        for ((i=0; i<${#BACKUP_MENU_OPTIONS[@]}; i++)); do
+            echo -e "  ${GREEN}$((i+1))${NC}) ${BACKUP_MENU_OPTIONS[$i]}"
+        done
+        echo ""
+        
+        # Read choice with special handling for 'r'
+        while true; do
+            echo -ne "${YELLOW}Select option (1-${#BACKUP_MENU_OPTIONS[@]}), 'r' to re-scan, or 'q' to quit: ${NC}"
+            read -r choice
+            
+            # Handle re-scan
+            if [ "$choice" = "r" ] || [ "$choice" = "R" ]; then
+                echo -e "${CYAN}Re-scanning backups...${NC}"
+                collect_backups
+                if [ $BACKUP_COUNT -eq 0 ]; then
+                    echo -e "${RED}No backups found!${NC}"
+                    echo "Create a backup first with: make backup"
+                    exit 1
+                fi
+                echo -e "${GREEN}Found $BACKUP_COUNT backup(s)${NC}"
+                echo ""
+                # Break inner loop to re-display menu with new backups
+                break
+            fi
+            
+            # Handle quit
+            if [ "$choice" = "q" ] || [ "$choice" = "Q" ]; then
+                echo -e "${YELLOW}Quit.${NC}"
+                exit 0
+            fi
+            
+            # Validate and convert to 0-based index
+            if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#BACKUP_MENU_OPTIONS[@]} ]; then
+                SELECTED_INDEX=$((choice - 1))
+                BACKUP_SERVER="${BACKUP_SERVERS[$SELECTED_INDEX]}"
+                BACKUP_ID="${BACKUP_IDS[$SELECTED_INDEX]}"
+                echo -e "${GREEN}Selected: ${BACKUP_SERVER} / ${BACKUP_ID}${NC}"
+                echo ""
+                # Break both loops
+                break 2
+            else
+                echo -e "${RED}Invalid selection. Please enter a number between 1 and ${#BACKUP_MENU_OPTIONS[@]}, 'r' to re-scan, or 'q' to quit.${NC}"
+            fi
+        done
+    done
+    
+    # Step 3: Select target node
+    echo -e "${CYAN}Step 3: Select target Patroni node${NC}"
     echo ""
-    echo "Available backups:"
-    for server in db1 db2 db3 db4; do
-        BACKUPS=$(docker exec barman barman list-backup "$server" 2>/dev/null | head -10)
-        if [ -n "$BACKUPS" ]; then
-            echo -e "${CYAN}${server}:${NC}"
-            echo "$BACKUPS"
+    NODE_MENU_OPTIONS=("db1" "db2" "db3" "db4")
+    arrow_menu "Select target Patroni node:" "${NODE_MENU_OPTIONS[@]}"
+    SELECTED_NODE_INDEX=$ARROW_MENU_RESULT
+    
+    if [ $SELECTED_NODE_INDEX -lt 0 ] || [ $SELECTED_NODE_INDEX -ge ${#NODE_MENU_OPTIONS[@]} ]; then
+        echo -e "${YELLOW}Quit.${NC}"
+        exit 0
+    fi
+    
+    TARGET_NODE="${NODE_MENU_OPTIONS[$SELECTED_NODE_INDEX]}"
+    AUTO_APPLY=true
+    echo -e "${GREEN}Selected: ${TARGET_NODE}${NC}"
+    echo ""
+    
+    # Step 4: Select WAL method (default: barman-wal-restore)
+    echo -e "${CYAN}Step 4: Select WAL method${NC}"
+    echo ""
+    WAL_MENU_OPTIONS=("barman-wal-restore (recommended)" "barman-get-wal")
+    
+    # Display menu
+    echo -e "${CYAN}Select WAL method:${NC}"
+    echo ""
+    for ((i=0; i<${#WAL_MENU_OPTIONS[@]}; i++)); do
+        echo -e "  ${GREEN}$((i+1))${NC}) ${WAL_MENU_OPTIONS[$i]}"
+    done
+    echo ""
+    
+    # Read choice with default on Enter
+    while true; do
+        echo -ne "${YELLOW}Select option (1-${#WAL_MENU_OPTIONS[@]}, Enter for [barman-wal-restore], or 'q' to quit): ${NC}"
+        read -r choice
+        
+        # Handle quit
+        if [ "$choice" = "q" ] || [ "$choice" = "Q" ]; then
+            echo -e "${YELLOW}Quit.${NC}"
+            exit 0
+        fi
+        
+        # Handle empty input (Enter) - use default
+        if [ -z "$choice" ]; then
+            WAL_METHOD="barman-wal-restore"
+            echo -e "${GREEN}Using default: ${WAL_METHOD}${NC}"
+            echo ""
+            break
+        fi
+        
+        # Validate and convert to 0-based index
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#WAL_MENU_OPTIONS[@]} ]; then
+            SELECTED_WAL_INDEX=$((choice - 1))
+            if [ "${WAL_MENU_OPTIONS[$SELECTED_WAL_INDEX]}" = "barman-wal-restore (recommended)" ]; then
+                WAL_METHOD="barman-wal-restore"
+            elif [ "${WAL_MENU_OPTIONS[$SELECTED_WAL_INDEX]}" = "barman-get-wal" ]; then
+                WAL_METHOD="barman-get-wal"
+            fi
+            echo -e "${GREEN}Selected: ${WAL_METHOD}${NC}"
+            echo ""
+            break
+        else
+            echo -e "${RED}Invalid selection. Please enter a number between 1 and ${#WAL_MENU_OPTIONS[@]}, press Enter for default, or 'q' to quit.${NC}"
         fi
     done
-    exit 1
+    
+    # Step 5: Enter target time (default: latest)
+    echo -e "${CYAN}Step 5: Enter target recovery time:${NC}"
+    echo -e "${YELLOW}  Options:${NC}"
+    echo -e "  - Press Enter for [latest] (recover to the most recent WAL)"
+    echo -e "  - Enter timestamp: 'YYYY-MM-DD HH:MM:SS' (e.g., '2026-01-23 12:30:00')"
+    echo ""
+    read -p "Target time [latest]: " TARGET_TIME
+    if [ -z "$TARGET_TIME" ]; then
+        TARGET_TIME="latest"
+        echo -e "${GREEN}Using default: latest${NC}"
+    fi
+    echo ""
+    
+    # Step 6: Confirm and start
+    echo -e "${BLUE}${BOLD}========================================${NC}"
+    echo -e "${BLUE}${BOLD}  PITR Configuration Summary${NC}"
+    echo -e "${BLUE}${BOLD}========================================${NC}"
+    echo -e "Backup Server: ${CYAN}${BACKUP_SERVER}${NC}"
+    echo -e "Backup ID:     ${CYAN}${BACKUP_ID}${NC}"
+    echo -e "Target Node:   ${CYAN}${TARGET_NODE}${NC}"
+    echo -e "WAL Method:    ${CYAN}${WAL_METHOD}${NC}"
+    echo -e "Target Time:   ${CYAN}${TARGET_TIME}${NC}"
+    echo -e "Auto Restore:  ${CYAN}Yes${NC}"
+    echo ""
+    read -p "Start PITR? (y/N): " -r
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo -e "${YELLOW}Cancelled.${NC}"
+        exit 0
+    fi
+    echo ""
+    
+    # Set flags for automated execution
+    START_RESTORE=true
+    AUTO_START=true
+else
+    # Non-interactive mode: check required arguments
+    if [ -z "$BACKUP_ID" ] || [ -z "$TARGET_TIME" ]; then
+        echo -e "${RED}Usage:${NC} $0 <backup-id> <target-time> [--server <server>] [--target <node>] [--restore] [--wal-method <method>]"
+        echo ""
+        echo "Examples:"
+        echo "  $0 20260104T153446 '2026-01-04 15:45:00'"
+        echo "  $0 20260104T153446 '2026-01-04 15:45:00' --server db2"
+        echo "  $0 20260104T153446 '2026-01-04 15:45:00' --server db2 --target db1"
+        echo "  $0 20260104T153446 latest --server db2 --target db1 --restore"
+        echo "  $0 20260104T153446 latest --server db2 --target db1 --restore --wal-method barman-get-wal"
+        echo ""
+        echo "Options:"
+        echo "  --server <server>  Server where the backup exists (db1, db2, db3, db4)"
+        echo "                     If not specified, will auto-detect by checking all servers"
+        echo "  --target <node>    Automatically apply PITR to specified node (db1, db2, db3, db4)"
+        echo "                     This will:"
+        echo "                     - Stop Patroni on target node"
+        echo "                     - Backup and replace data directory"
+        echo "                     - Stop other nodes"
+        echo "                     - Configure recovery settings"
+        echo "  --restore          Start PostgreSQL recovery automatically (only with --target)"
+        echo "                     If not specified, you must start PostgreSQL manually"
+        echo "  --auto-start       Automatically start PostgreSQL and monitor recovery progress"
+        echo "                     If not specified, recovery monitoring is skipped"
+        echo "  --wal-method <method>  Method to fetch WAL files (default: barman-wal-restore)"
+        echo "                        Options:"
+        echo "                        - barman-wal-restore: Use barman-wal-restore command (recommended)"
+        echo "                        - barman-get-wal: Use SSH with barman get-wal command"
+        echo ""
+        echo "Available backups:"
+        for server in db1 db2 db3 db4; do
+            BACKUPS=$(docker exec barman barman list-backup "$server" 2>/dev/null | head -10)
+            if [ -n "$BACKUPS" ]; then
+                echo -e "${CYAN}${server}:${NC}"
+                echo "$BACKUPS"
+            fi
+        done
+        exit 1
+    fi
 fi
 
 # Default target node if not specified
@@ -491,7 +744,7 @@ if [ "$TARGET_TIME" != "latest" ] && [ -n "$BACKUP_END_TIME" ]; then
                 fi
                 echo -e "${CYAN}  Recommendations:${NC}"
                 echo -e "    1. ${BOLD}Use 'latest' to recover to the most recent available state (RECOMMENDED)${NC}"
-                echo -e "       Command: bash scripts/perform_pitr.sh ${BACKUP_ID} latest --server ${BACKUP_SERVER} --target ${TARGET_NODE} --restore"
+                echo -e "       Command: bash scripts/pitr/perform_pitr.sh ${BACKUP_ID} latest --server ${BACKUP_SERVER} --target ${TARGET_NODE} --restore"
                 echo -e "    2. Use the backup end time: ${BACKUP_END_TIME}"
                 echo -e "    3. Check if a later backup has the required WALs"
                 echo ""
@@ -830,18 +1083,51 @@ if [ "$AUTO_APPLY" = "true" ]; then
     # Step 7.4a: Ensure SSH key is in default location for barman-wal-restore
     echo -e "${YELLOW}[7.4a/10] Setting up SSH key for barman-wal-restore...${NC}"
     # barman-wal-restore uses SSH and expects the key at ~/.ssh/id_rsa (default location)
-    # Copy the key from /var/lib/postgresql/.ssh/barman_rsa to ~/.ssh/id_rsa if it doesn't exist
-    docker exec "$TARGET_NODE" su - postgres -c "
-        if [ -f /var/lib/postgresql/.ssh/barman_rsa ] && [ ! -f ~/.ssh/id_rsa ]; then
-            cp /var/lib/postgresql/.ssh/barman_rsa ~/.ssh/id_rsa
-            chmod 600 ~/.ssh/id_rsa
-            echo 'SSH key copied to default location'
-        elif [ -f ~/.ssh/id_rsa ]; then
-            echo 'SSH key already in default location'
-        else
-            echo 'WARNING: SSH key not found at /var/lib/postgresql/.ssh/barman_rsa'
+    # Get postgres user's actual home directory (usually /var/lib/postgresql)
+    POSTGRES_HOME=$(docker exec "$TARGET_NODE" getent passwd postgres 2>/dev/null | cut -d: -f6 || echo "/var/lib/postgresql")
+    echo -e "${CYAN}  Postgres home directory: $POSTGRES_HOME${NC}"
+    
+    # Check if source key exists
+    if ! docker exec "$TARGET_NODE" test -f /var/lib/postgresql/.ssh/barman_rsa 2>/dev/null; then
+        echo -e "${YELLOW}  ⚠ WARNING: SSH key not found at /var/lib/postgresql/.ssh/barman_rsa${NC}"
+        echo -e "${CYAN}  Checking alternative locations...${NC}"
+        # Try to find the key in other locations
+        if docker exec "$TARGET_NODE" test -f /home/postgres/.ssh/barman_rsa 2>/dev/null; then
+            echo -e "${CYAN}  Found key at /home/postgres/.ssh/barman_rsa, copying...${NC}"
+            docker exec "$TARGET_NODE" mkdir -p "$POSTGRES_HOME/.ssh" 2>/dev/null
+            docker exec "$TARGET_NODE" cp /home/postgres/.ssh/barman_rsa "$POSTGRES_HOME/.ssh/id_rsa" 2>/dev/null
+            docker exec "$TARGET_NODE" chown postgres:postgres "$POSTGRES_HOME/.ssh/id_rsa" 2>/dev/null
+            docker exec "$TARGET_NODE" chmod 600 "$POSTGRES_HOME/.ssh/id_rsa" 2>/dev/null
+            docker exec "$TARGET_NODE" chown postgres:postgres "$POSTGRES_HOME/.ssh" 2>/dev/null
+            docker exec "$TARGET_NODE" chmod 700 "$POSTGRES_HOME/.ssh" 2>/dev/null
         fi
-    " 2>&1
+    else
+        # Source key exists, copy it to the home directory
+        if ! docker exec "$TARGET_NODE" test -f "$POSTGRES_HOME/.ssh/id_rsa" 2>/dev/null; then
+            echo -e "${CYAN}  Copying SSH key from /var/lib/postgresql/.ssh/barman_rsa to $POSTGRES_HOME/.ssh/id_rsa${NC}"
+            # Create .ssh directory if it doesn't exist
+            docker exec "$TARGET_NODE" mkdir -p "$POSTGRES_HOME/.ssh" 2>/dev/null
+            docker exec "$TARGET_NODE" chown postgres:postgres "$POSTGRES_HOME/.ssh" 2>/dev/null
+            docker exec "$TARGET_NODE" chmod 700 "$POSTGRES_HOME/.ssh" 2>/dev/null
+            
+            # Copy the key
+            docker exec "$TARGET_NODE" cp /var/lib/postgresql/.ssh/barman_rsa "$POSTGRES_HOME/.ssh/id_rsa" 2>/dev/null
+            docker exec "$TARGET_NODE" chown postgres:postgres "$POSTGRES_HOME/.ssh/id_rsa" 2>/dev/null
+            docker exec "$TARGET_NODE" chmod 600 "$POSTGRES_HOME/.ssh/id_rsa" 2>/dev/null
+            
+            # Verify the copy was successful
+            if docker exec "$TARGET_NODE" test -f "$POSTGRES_HOME/.ssh/id_rsa" 2>/dev/null; then
+                echo -e "${GREEN}  ✓ SSH key copied successfully to $POSTGRES_HOME/.ssh/id_rsa${NC}"
+            else
+                echo -e "${RED}  ✗ Failed to copy SSH key${NC}"
+            fi
+        else
+            echo -e "${CYAN}  SSH key already exists at $POSTGRES_HOME/.ssh/id_rsa${NC}"
+            # Ensure permissions are correct
+            docker exec "$TARGET_NODE" chown postgres:postgres "$POSTGRES_HOME/.ssh/id_rsa" 2>/dev/null
+            docker exec "$TARGET_NODE" chmod 600 "$POSTGRES_HOME/.ssh/id_rsa" 2>/dev/null
+        fi
+    fi
     echo -e "${GREEN}  ✓ SSH key configured${NC}"
     echo ""
     
@@ -849,12 +1135,16 @@ if [ "$AUTO_APPLY" = "true" ]; then
     echo -e "${YELLOW}[7.4b/10] Establishing SSH connection to Barman...${NC}"
     echo -e "${CYAN}  This will accept the Barman host key to avoid connection errors during recovery${NC}"
     
-    # Ensure .ssh directory exists and has correct permissions
-    docker exec "$TARGET_NODE" su - postgres -c "mkdir -p ~/.ssh && chmod 700 ~/.ssh" 2>/dev/null
+    # Ensure .ssh directory exists and has correct permissions (already done above, but ensure it's set)
+    docker exec "$TARGET_NODE" mkdir -p "$POSTGRES_HOME/.ssh" 2>/dev/null
+    docker exec "$TARGET_NODE" chown postgres:postgres "$POSTGRES_HOME/.ssh" 2>/dev/null
+    docker exec "$TARGET_NODE" chmod 700 "$POSTGRES_HOME/.ssh" 2>/dev/null
     
-    # Determine which SSH key to use
+    # Determine which SSH key to use (check postgres home directory)
     SSH_KEY_PATH=""
-    if docker exec "$TARGET_NODE" test -f /var/lib/postgresql/.ssh/id_rsa 2>/dev/null; then
+    if docker exec "$TARGET_NODE" test -f "$POSTGRES_HOME/.ssh/id_rsa" 2>/dev/null; then
+        SSH_KEY_PATH="$POSTGRES_HOME/.ssh/id_rsa"
+    elif docker exec "$TARGET_NODE" test -f /var/lib/postgresql/.ssh/id_rsa 2>/dev/null; then
         SSH_KEY_PATH="/var/lib/postgresql/.ssh/id_rsa"
     elif docker exec "$TARGET_NODE" test -f /var/lib/postgresql/.ssh/barman_rsa 2>/dev/null; then
         SSH_KEY_PATH="/var/lib/postgresql/.ssh/barman_rsa"
@@ -889,7 +1179,11 @@ if [ "$AUTO_APPLY" = "true" ]; then
             # Try to get Barman's host key and add it manually
             BARMAN_HOST_KEY=$(docker exec barman ssh-keyscan -t rsa barman 2>/dev/null | head -1 || echo "")
             if [ -n "$BARMAN_HOST_KEY" ]; then
-                docker exec "$TARGET_NODE" su - postgres -c "echo '$BARMAN_HOST_KEY' >> ~/.ssh/known_hosts && chmod 600 ~/.ssh/known_hosts" 2>/dev/null
+                # POSTGRES_HOME already set above, but ensure it's available here
+                if [ -z "$POSTGRES_HOME" ]; then
+                    POSTGRES_HOME=$(docker exec "$TARGET_NODE" getent passwd postgres 2>/dev/null | cut -d: -f6 || echo "/var/lib/postgresql")
+                fi
+                docker exec "$TARGET_NODE" bash -c "echo '$BARMAN_HOST_KEY' >> $POSTGRES_HOME/.ssh/known_hosts && chmod 600 $POSTGRES_HOME/.ssh/known_hosts && chown postgres:postgres $POSTGRES_HOME/.ssh/known_hosts" 2>/dev/null
                 echo -e "${GREEN}  ✓ Barman host key added to known_hosts${NC}"
             else
                 echo -e "${YELLOW}  ⚠ Could not add host key automatically, but continuing anyway${NC}"
@@ -1281,7 +1575,7 @@ if [ "$AUTO_APPLY" = "true" ]; then
                             echo ""
                             echo -e "${CYAN}  Solutions:${NC}"
                             echo -e "    1. ${BOLD}Use 'latest' to recover to the most recent complete state (RECOMMENDED)${NC}"
-                            echo -e "       Command: bash scripts/perform_pitr.sh ${BACKUP_ID} latest --server ${BACKUP_SERVER} --target ${TARGET_NODE} --restore"
+                            echo -e "       Command: bash scripts/pitr/perform_pitr.sh ${BACKUP_ID} latest --server ${BACKUP_SERVER} --target ${TARGET_NODE} --restore"
                             echo -e "    2. Wait for the WAL file to be fully archived, then retry"
                             echo -e "    3. Use a target time before this WAL file is needed"
                         else
@@ -1315,7 +1609,7 @@ if [ "$AUTO_APPLY" = "true" ]; then
         elif [ "$POSTGRES_EXIT_CODE" != "0" ] && [ -n "$POSTGRES_EXIT_CODE" ]; then
             echo ""
             echo -e "${YELLOW}  PostgreSQL process exited with code ${POSTGRES_EXIT_CODE}${NC}"
-            echo -e "${CYAN}  Check recovery status with: bash scripts/monitor_recovery.sh ${TARGET_NODE}${NC}"
+            echo -e "${CYAN}  Check recovery status with: bash scripts/pitr/monitor_recovery.sh ${TARGET_NODE}${NC}"
             echo -e "${CYAN}  Check logs: docker exec ${TARGET_NODE} tail -100 /var/log/postgresql/*.log${NC}"
         else
             echo ""
@@ -1475,7 +1769,7 @@ if [ "$AUTO_APPLY" = "true" ]; then
         echo -e "  docker exec ${TARGET_NODE} supervisorctl start patroni"
         echo ""
         echo -e "${CYAN}After recovery completes:${NC}"
-        echo -e "  1. Monitor recovery: bash scripts/monitor_recovery.sh ${TARGET_NODE}"
+        echo -e "  1. Monitor recovery: bash scripts/pitr/monitor_recovery.sh ${TARGET_NODE}"
         echo -e "  2. Check cluster status: docker exec ${TARGET_NODE} patronictl -c /etc/patroni/patroni.yml list"
         echo -e "  3. Once recovery completes, promote to leader if needed:"
         echo -e "     docker exec ${TARGET_NODE} patronictl -c /etc/patroni/patroni.yml failover ${PATRONI_CLUSTER_NAME} --candidate ${TARGET_NODE} --force"
@@ -1595,7 +1889,7 @@ if [ "$AUTO_APPLY" = "true" ]; then
     if [ "$POSTGRES_READY" != "true" ]; then
         echo -e "${YELLOW}  ⚠ PostgreSQL did not become ready within ${MAX_WAIT}s${NC}"
         echo -e "${CYAN}  This is normal for large recoveries. Continuing to monitor recovery...${NC}"
-        echo -e "${CYAN}  You can monitor progress with: bash scripts/monitor_recovery.sh ${TARGET_NODE}${NC}"
+        echo -e "${CYAN}  You can monitor progress with: bash scripts/pitr/monitor_recovery.sh ${TARGET_NODE}${NC}"
         # Don't exit - continue to recovery monitoring step
     fi
     echo ""
@@ -1723,7 +2017,7 @@ if [ "$AUTO_APPLY" = "true" ]; then
         if [ "$IS_RECOVERY" != "f" ] && [ "$IS_RECOVERY" != "false" ]; then
             echo -e "${YELLOW}  ⚠ Recovery still in progress after ${MAX_RECOVERY_WAIT}s${NC}"
             echo -e "${CYAN}  This is normal for large recoveries. You can continue monitoring:${NC}"
-            echo -e "    bash scripts/monitor_recovery.sh ${TARGET_NODE}"
+            echo -e "    bash scripts/pitr/monitor_recovery.sh ${TARGET_NODE}"
             echo -e "${CYAN}  Or check status manually:${NC}"
             echo -e "    docker exec ${TARGET_NODE} psql -U postgres -d ${DEFAULT_DATABASE} -p 5431 -h localhost -c \"SELECT pg_is_in_recovery();\""
         fi
@@ -1909,7 +2203,7 @@ if [ "$AUTO_APPLY" = "true" ]; then
     echo -e "${GREEN}✓ PITR has been applied to ${TARGET_NODE}${NC}"
     echo ""
     echo -e "${CYAN}Next steps:${NC}"
-    echo -e "  1. Verify data: bash scripts/count_database_stats.sh"
+    echo -e "  1. Verify data: bash scripts/debug/count_database_stats.sh"
     echo -e "  2. Check cluster status: docker exec ${TARGET_NODE} patronictl -c /etc/patroni/patroni.yml list"
     if [ ${#OTHER_NODES[@]} -gt 0 ]; then
         echo -e "  3. Monitor reinitialization progress (if started):"
@@ -1980,7 +2274,7 @@ echo "   docker exec $TARGET_NODE psql -U postgres -p 5432 -h localhost -c \"SEL
 echo "   # Should return 'f' (false) when recovery is complete"
 echo ""
 echo "10. Verify data:"
-echo "    ./scripts/count_database_stats.sh"
+echo "    ./scripts/debug/count_database_stats.sh"
 echo ""
 echo -e "${CYAN}${BOLD}To promote PITR node as new leader:${NC}"
 echo ""

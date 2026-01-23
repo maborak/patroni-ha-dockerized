@@ -144,7 +144,7 @@ bootstrap:
         - encoding: UTF8
         - data-checksums
         - locale: en_US.UTF-8
-  post_bootstrap: /etc/patroni/scripts/create_databases.sh
+  post_bootstrap: /etc/patroni/create_databases.sh
 
 postgresql:
   listen: 0.0.0.0:5431
