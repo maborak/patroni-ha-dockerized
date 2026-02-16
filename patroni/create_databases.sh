@@ -14,6 +14,7 @@ PGPORT=${PGPORT:-5431}
 PGUSER=${PGUSER:-postgres}
 
 # Create database if it doesn't exist
+# Create database if it doesn't exist
 psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d postgres <<EOF
 SELECT 'CREATE DATABASE $DEFAULT_DATABASE'
 WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '$DEFAULT_DATABASE')\gexec

@@ -170,6 +170,40 @@ services:
       - db4
     restart: unless-stopped
 
+  # PgBouncer
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    container_name: pgbouncer
+    ports:
+      - "6432:6432"
+    volumes:
+      - ./configs/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini
+    environment:
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-Dgo7cQ41WDTnd89G46TgfVtr}
+    command: sh -c "echo '\"postgres\" \"\$POSTGRES_PASSWORD\"' > /tmp/userlist.txt && /usr/bin/pgbouncer /etc/pgbouncer/pgbouncer.ini"
+    networks:
+      - patroni_network
+    depends_on:
+      - haproxy
+    restart: unless-stopped
+
+  # PgBouncer Read-Only (Port 6433 -> HAProxy 5432)
+  pgbouncer-ro:
+    image: edoburu/pgbouncer:latest
+    container_name: pgbouncer-ro
+    ports:
+      - "6433:6432"
+    volumes:
+      - ./configs/pgbouncer-ro.ini:/etc/pgbouncer/pgbouncer.ini
+    environment:
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-Dgo7cQ41WDTnd89G46TgfVtr}
+    command: sh -c "echo '\"postgres\" \"\$POSTGRES_PASSWORD\"' > /tmp/userlist.txt && /usr/bin/pgbouncer /etc/pgbouncer/pgbouncer.ini"
+    networks:
+      - patroni_network
+    depends_on:
+      - haproxy
+    restart: unless-stopped
+
 networks:
   patroni_network:
     driver: bridge

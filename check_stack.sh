@@ -36,6 +36,8 @@ PATRONI_DB4_API_PORT=${PATRONI_DB4_API_PORT:-8004}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-Dgo7cQ41WDTnd89G46TgfVtr}
 REPLICATOR_PASSWORD=${REPLICATOR_PASSWORD:-Dgo7cQ41WDTnd89G46TgfVtr}
 DEFAULT_DATABASE=${DEFAULT_DATABASE:-maborak}
+PGBOUNCER_PORT=${PGBOUNCER_PORT:-6432}
+PGBOUNCER_RO_PORT=${PGBOUNCER_RO_PORT:-6433}
 
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}  Docker Compose Stack Health Check${NC}"
@@ -136,6 +138,8 @@ check_container "db3"
 check_container "db4"
 check_container "haproxy"
 check_container "barman"
+check_container "pgbouncer"
+check_container "pgbouncer-ro"
 echo ""
 
 # Check etcd connectivity
@@ -181,6 +185,22 @@ for db in db1 db2 db3 db4; do
         echo -e "${RED}✗ ${db} PostgreSQL: Not ready${NC}"
     fi
 done
+echo ""
+
+# Check PgBouncer connectivity
+echo -e "${YELLOW}Checking PgBouncer connectivity...${NC}"
+if docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" pgbouncer psql -h 127.0.0.1 -p 6432 -U postgres -d maborak -c "SELECT 1" > /dev/null 2>&1; then
+    echo -e "${GREEN}✓ PgBouncer (RW): Ready${NC}"
+else
+    echo -e "${RED}✗ PgBouncer (RW): Not ready (Authentication or backend issue)${NC}"
+fi
+
+if docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" pgbouncer-ro psql -h 127.0.0.1 -p 6432 -U postgres -d maborak -c "SELECT 1" > /dev/null 2>&1; then
+    echo -e "${GREEN}✓ PgBouncer (RO): Ready${NC}"
+else
+    echo -e "${RED}✗ PgBouncer (RO): Not ready (Authentication or backend issue)${NC}"
+fi
+echo ""
 
 # Check HAProxy
 if docker exec -it haproxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg > /dev/null 2>&1; then
@@ -596,6 +616,10 @@ if check_port "localhost" "${PATRONI_DB3_API_PORT}" "db3 Patroni API"; then ((PO
 ((PORT_CHECKS++))
 if check_port "localhost" "${PATRONI_DB4_API_PORT}" "db4 Patroni API"; then ((PORT_SUCCESS++)); fi
 ((PORT_CHECKS++))
+if check_port "localhost" "${PGBOUNCER_PORT}" "PgBouncer (RW)"; then ((PORT_SUCCESS++)); fi
+((PORT_CHECKS++))
+if check_port "localhost" "${PGBOUNCER_RO_PORT}" "PgBouncer (RO)"; then ((PORT_SUCCESS++)); fi
+((PORT_CHECKS++))
 
 if [ $PORT_SUCCESS -lt $PORT_CHECKS ]; then
     echo -e "${YELLOW}Note: Some ports may not be accessible from host. This is normal if containers are still starting.${NC}"
@@ -625,6 +649,13 @@ echo "  # Connection URL (without password - will prompt):"
 echo -e "  ${CYAN}postgresql://postgres@localhost:${HAPROXY_WRITE_PORT}/${DEFAULT_DATABASE}${NC}"
 echo "  # Connection URL (with password):"
 echo -e "  ${CYAN}postgresql://postgres:${POSTGRES_PASSWORD}@localhost:${HAPROXY_WRITE_PORT}/${DEFAULT_DATABASE}${NC}"
+echo ""
+echo -e "${YELLOW}PgBouncer (Recommended):${NC}"
+echo "  For WRITE operations:"
+echo -e "  ${CYAN}psql -h localhost -p ${PGBOUNCER_PORT} -U postgres -d ${DEFAULT_DATABASE}${NC}"
+echo ""
+echo "  For READ operations (Replicas):"
+echo -e "  ${CYAN}psql -h localhost -p ${PGBOUNCER_RO_PORT} -U postgres -d ${DEFAULT_DATABASE}${NC}"
 echo ""
 echo -e "${YELLOW}For READ operations (routes to replicas only, round-robin):${NC}"
 echo -e "  ${CYAN}psql -h localhost -p ${HAPROXY_READ_PORT} -U postgres -d ${DEFAULT_DATABASE}${NC}"
