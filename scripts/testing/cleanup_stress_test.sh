@@ -23,7 +23,7 @@ DB_HOST_IP="localhost"
 DB_PORT="${HAPROXY_WRITE_PORT:-5551}"
 DB_NAME="${DEFAULT_DATABASE:-maborak}"
 DB_USER="postgres"
-DB_PASSWORD="${POSTGRES_PASSWORD:-Dgo7cQ41WDTnd89G46TgfVtr}"
+DB_PASSWORD="${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}"
 
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}  Cleaning Up Stress Test Data${NC}"

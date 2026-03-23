@@ -11,3 +11,8 @@
 .env
 .env.local
 .env.*.local
+
+# Claude framework
+.claude/brainstorm/sessions/
+.superpowers/
+.claude/

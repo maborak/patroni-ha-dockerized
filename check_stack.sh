@@ -33,8 +33,8 @@ PATRONI_DB3_PORT=${PATRONI_DB3_PORT:-15433}
 PATRONI_DB3_API_PORT=${PATRONI_DB3_API_PORT:-8003}
 PATRONI_DB4_PORT=${PATRONI_DB4_PORT:-15434}
 PATRONI_DB4_API_PORT=${PATRONI_DB4_API_PORT:-8004}
-POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-Dgo7cQ41WDTnd89G46TgfVtr}
-REPLICATOR_PASSWORD=${REPLICATOR_PASSWORD:-Dgo7cQ41WDTnd89G46TgfVtr}
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+REPLICATOR_PASSWORD=${REPLICATOR_PASSWORD:?Set REPLICATOR_PASSWORD in .env}
 DEFAULT_DATABASE=${DEFAULT_DATABASE:-maborak}
 PGBOUNCER_PORT=${PGBOUNCER_PORT:-6432}
 PGBOUNCER_RO_PORT=${PGBOUNCER_RO_PORT:-6433}
@@ -132,6 +132,7 @@ check_http() {
 echo -e "${YELLOW}Checking containers...${NC}"
 check_container "etcd1"
 check_container "etcd2"
+check_container "etcd3"
 check_container "db1"
 check_container "db2"
 check_container "db3"
@@ -155,6 +156,12 @@ if docker exec -it etcd2 etcdctl endpoint health --endpoints=http://etcd2:2379 2
 else
     echo -e "${RED}✗ etcd2: Unhealthy${NC}"
 fi
+
+if docker exec -it etcd3 etcdctl endpoint health --endpoints=http://etcd3:2379 2>/dev/null | grep -q "healthy"; then
+    echo -e "${GREEN}✓ etcd3: Healthy${NC}"
+else
+    echo -e "${RED}✗ etcd3: Unhealthy${NC}"
+fi
 echo ""
 
 # Check Patroni REST API (from inside containers)
@@ -172,6 +179,73 @@ for db in "db1:$DB1_ROLE" "db2:$DB2_ROLE" "db3:$DB3_ROLE" "db4:$DB4_ROLE"; do
         echo -e "${GREEN}✓ ${db_name} Patroni API: ${db_role}${NC}"
     else
         echo -e "${RED}✗ ${db_name} Patroni API: ${db_role} (not responding properly)${NC}"
+    fi
+done
+echo ""
+
+# Split-brain detection
+echo ""
+echo -e "${YELLOW}=== Split-Brain Detection ===${NC}"
+LEADER_COUNT=0
+for db in db1 db2 db3 db4; do
+    role=$(curl -s "http://localhost:$(docker port $db 8001 2>/dev/null | cut -d: -f2)/patroni" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('role',''))" 2>/dev/null)
+    if [ "$role" = "master" ] || [ "$role" = "primary" ]; then
+        LEADER_COUNT=$((LEADER_COUNT + 1))
+    fi
+done
+if [ "$LEADER_COUNT" -eq 1 ]; then
+    echo -e "${GREEN}✓ Exactly 1 leader found — no split-brain${NC}"
+elif [ "$LEADER_COUNT" -eq 0 ]; then
+    echo -e "${RED}✗ CRITICAL: No leader found! Cluster has no primary.${NC}"
+else
+    echo -e "${RED}✗ CRITICAL: SPLIT-BRAIN DETECTED! $LEADER_COUNT leaders found!${NC}"
+fi
+
+# Replication lag check
+echo ""
+echo -e "${YELLOW}=== Replication Lag ===${NC}"
+# Find leader container
+LEADER_CONTAINER=""
+for db in db1 db2 db3 db4; do
+    role=$(curl -s "http://localhost:$(docker port $db 8001 2>/dev/null | cut -d: -f2)/patroni" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('role',''))" 2>/dev/null)
+    if [ "$role" = "master" ] || [ "$role" = "primary" ]; then
+        LEADER_CONTAINER=$db
+        break
+    fi
+done
+if [ -n "$LEADER_CONTAINER" ]; then
+    LAG_OUTPUT=$(docker exec "$LEADER_CONTAINER" psql -U postgres -p 5431 -t -A -c \
+        "SELECT application_name, state, pg_wal_lsn_diff(sent_lsn, replay_lsn) as lag_bytes FROM pg_stat_replication ORDER BY application_name;" 2>/dev/null)
+    if [ -n "$LAG_OUTPUT" ]; then
+        echo "$LAG_OUTPUT" | while IFS='|' read -r app state lag; do
+            if [ -n "$app" ]; then
+                lag_mb=$(echo "scale=2; ${lag:-0} / 1048576" | bc 2>/dev/null || echo "0")
+                if [ "$(echo "$lag > 1048576" | bc 2>/dev/null)" = "1" ]; then
+                    echo -e "  ${RED}✗ $app: ${lag_mb} MB lag ($state)${NC}"
+                else
+                    echo -e "  ${GREEN}✓ $app: ${lag_mb} MB lag ($state)${NC}"
+                fi
+            fi
+        done
+    else
+        echo -e "  ${YELLOW}No active replication connections found${NC}"
+    fi
+else
+    echo -e "  ${RED}Cannot check lag — no leader found${NC}"
+fi
+
+# Barman backup status
+echo ""
+echo -e "${YELLOW}=== Barman Backup Status ===${NC}"
+for srv in db1 db2 db3 db4; do
+    BARMAN_CHECK=$(docker exec barman barman check "$srv" --nagios 2>/dev/null)
+    BARMAN_EXIT=$?
+    if [ $BARMAN_EXIT -eq 0 ]; then
+        echo -e "  ${GREEN}✓ $srv: OK${NC}"
+    elif [ $BARMAN_EXIT -eq 1 ]; then
+        echo -e "  ${YELLOW}⚠ $srv: WARNING — $BARMAN_CHECK${NC}"
+    else
+        echo -e "  ${RED}✗ $srv: CRITICAL — $BARMAN_CHECK${NC}"
     fi
 done
 echo ""

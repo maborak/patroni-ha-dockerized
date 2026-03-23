@@ -1,7 +1,7 @@
 services:
-  # etcd cluster (2 nodes)
+  # etcd cluster (3 nodes)
   etcd1:
-    image: quay.io/coreos/etcd:v3.5.0
+    image: quay.io/coreos/etcd:v3.5.17
     container_name: etcd1
     hostname: etcd1
     ports:
@@ -19,12 +19,19 @@ services:
       --advertise-client-urls=http://etcd1:2379
       --listen-peer-urls=http://0.0.0.0:2380
       --initial-advertise-peer-urls=http://etcd1:2380
-      --initial-cluster=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380
+      --initial-cluster=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
       --initial-cluster-state=new
       --initial-cluster-token=etcd-cluster-1
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health", "--endpoints=http://localhost:2379"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
 
   etcd2:
-    image: quay.io/coreos/etcd:v3.5.0
+    image: quay.io/coreos/etcd:v3.5.17
     container_name: etcd2
     hostname: etcd2
     ports:
@@ -42,9 +49,46 @@ services:
       --advertise-client-urls=http://etcd2:2379
       --listen-peer-urls=http://0.0.0.0:2380
       --initial-advertise-peer-urls=http://etcd2:2380
-      --initial-cluster=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380
+      --initial-cluster=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
       --initial-cluster-state=new
       --initial-cluster-token=etcd-cluster-1
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health", "--endpoints=http://localhost:2379"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  etcd3:
+    image: quay.io/coreos/etcd:v3.5.17
+    container_name: etcd3
+    hostname: etcd3
+    ports:
+      - "${ETCD3_CLIENT_PORT}:2379"
+      - "${ETCD3_PEER_PORT}:2380"
+    volumes:
+      - etcd3_data:/etcd-data
+    networks:
+      - patroni_network
+    command: >
+      etcd
+      --name=etcd3
+      --data-dir=/etcd-data
+      --listen-client-urls=http://0.0.0.0:2379
+      --advertise-client-urls=http://etcd3:2379
+      --listen-peer-urls=http://0.0.0.0:2380
+      --initial-advertise-peer-urls=http://etcd3:2380
+      --initial-cluster=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      --initial-cluster-state=new
+      --initial-cluster-token=etcd-cluster-1
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health", "--endpoints=http://localhost:2379"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
 
   # Patroni/PostgreSQL cluster
   # Base template for Patroni nodes
@@ -56,8 +100,19 @@ services:
     networks:
       - patroni_network
     depends_on:
-      - etcd1
-      - etcd2
+      etcd1:
+        condition: service_healthy
+      etcd2:
+        condition: service_healthy
+      etcd3:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -p 5431 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
 
   db1:
     <<: *patroni_base
@@ -132,7 +187,7 @@ services:
     hostname: barman
     environment:
       - BARMAN_SERVER_NAME=main
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-Dgo7cQ41WDTnd89G46TgfVtr}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     ports:
       - "${BARMAN_PORT}:5432"
     volumes:
@@ -145,10 +200,21 @@ services:
     networks:
       - patroni_network
     depends_on:
-      - db1
-      - db2
-      - db3
-      - db4
+      db1:
+        condition: service_healthy
+      db2:
+        condition: service_healthy
+      db3:
+        condition: service_healthy
+      db4:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "barman check db1 --nagios 2>/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
 
   # HAProxy load balancer
   haproxy:
@@ -164,10 +230,20 @@ services:
     networks:
       - patroni_network
     depends_on:
-      - db1
-      - db2
-      - db3
-      - db4
+      db1:
+        condition: service_healthy
+      db2:
+        condition: service_healthy
+      db3:
+        condition: service_healthy
+      db4:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     restart: unless-stopped
 
   # PgBouncer
@@ -179,12 +255,19 @@ services:
     volumes:
       - ./configs/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini
     environment:
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-Dgo7cQ41WDTnd89G46TgfVtr}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     command: sh -c "echo '\"postgres\" \"\$POSTGRES_PASSWORD\"' > /tmp/userlist.txt && /usr/bin/pgbouncer /etc/pgbouncer/pgbouncer.ini"
     networks:
       - patroni_network
     depends_on:
-      - haproxy
+      haproxy:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 6432 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
 
   # PgBouncer Read-Only (Port 6433 -> HAProxy 5432)
@@ -196,12 +279,19 @@ services:
     volumes:
       - ./configs/pgbouncer-ro.ini:/etc/pgbouncer/pgbouncer.ini
     environment:
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-Dgo7cQ41WDTnd89G46TgfVtr}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     command: sh -c "echo '\"postgres\" \"\$POSTGRES_PASSWORD\"' > /tmp/userlist.txt && /usr/bin/pgbouncer /etc/pgbouncer/pgbouncer.ini"
     networks:
       - patroni_network
     depends_on:
-      - haproxy
+      haproxy:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 6432 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
 
 networks:
@@ -211,6 +301,7 @@ networks:
 volumes:
   etcd1_data:
   etcd2_data:
+  etcd3_data:
   db1_data:
   db2_data:
   db3_data:

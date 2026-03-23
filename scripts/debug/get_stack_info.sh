@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script to check stack health and output connection information in JSON format
-# Usage: ./get_stack_info.sh [--json|--human]
+# Usage: ./get_stack_info.sh [--json|--human] [--show-passwords]
 
 # Don't exit on error - we want to output info even if some checks fail
 set +e
@@ -108,12 +108,34 @@ print_status() {
     fi
 }
 
+# Password display control
+SHOW_PASSWORDS=false
+
+# Parse arguments
+OUTPUT_FORMAT="--json"
+for arg in "$@"; do
+    case "$arg" in
+        --json|--human)
+            OUTPUT_FORMAT="$arg"
+            ;;
+        --show-passwords)
+            SHOW_PASSWORDS=true
+            ;;
+    esac
+done
+
+# Helper function to redact passwords unless --show-passwords is passed
+display_password() {
+    if [ "$SHOW_PASSWORDS" = true ]; then
+        echo "$1"
+    else
+        echo "********"
+    fi
+}
+
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
-
-# Output format (default: json)
-OUTPUT_FORMAT="${1:---json}"
 
 # Load environment variables from .env file
 if [ -f .env ]; then
@@ -141,8 +163,8 @@ ETCD2_CLIENT_PORT=${ETCD2_CLIENT_PORT:-22379}
 ETCD1_PEER_PORT=${ETCD1_PEER_PORT:-12380}
 ETCD2_PEER_PORT=${ETCD2_PEER_PORT:-22380}
 BARMAN_PORT=${BARMAN_PORT:-5432}
-POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-Dgo7cQ41WDTnd89G46TgfVtr}
-REPLICATOR_PASSWORD=${REPLICATOR_PASSWORD:-Dgo7cQ41WDTnd89G46TgfVtr}
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+REPLICATOR_PASSWORD=${REPLICATOR_PASSWORD:?Set REPLICATOR_PASSWORD in .env}
 DEFAULT_DATABASE=${DEFAULT_DATABASE:-maborak}
 
 # Use docker compose (v2) if available, otherwise docker-compose (v1)
@@ -416,8 +438,8 @@ if [ "$OUTPUT_FORMAT" = "--json" ]; then
       "stats": $HAPROXY_STATS_PORT
     },
     "connection_strings": {
-      "write": "postgresql://postgres:${POSTGRES_PASSWORD}@localhost:${HAPROXY_WRITE_PORT}/${DEFAULT_DATABASE}",
-      "read": "postgresql://postgres:${POSTGRES_PASSWORD}@localhost:${HAPROXY_READ_PORT}/${DEFAULT_DATABASE}",
+      "write": "postgresql://postgres:$(display_password "$POSTGRES_PASSWORD")@localhost:${HAPROXY_WRITE_PORT}/${DEFAULT_DATABASE}",
+      "read": "postgresql://postgres:$(display_password "$POSTGRES_PASSWORD")@localhost:${HAPROXY_READ_PORT}/${DEFAULT_DATABASE}",
       "stats": "http://localhost:${HAPROXY_STATS_PORT}/stats"
     },
     "running": $HAPROXY_RUNNING,
@@ -431,7 +453,7 @@ if [ "$OUTPUT_FORMAT" = "--json" ]; then
         "database_port": $PATRONI_DB1_PORT,
         "api_port": $PATRONI_DB1_API_PORT,
         "api_url": "http://localhost:${PATRONI_DB1_API_PORT}",
-        "connection_string": "postgresql://postgres:${POSTGRES_PASSWORD}@localhost:${PATRONI_DB1_PORT}/${DEFAULT_DATABASE}",
+        "connection_string": "postgresql://postgres:$(display_password "$POSTGRES_PASSWORD")@localhost:${PATRONI_DB1_PORT}/${DEFAULT_DATABASE}",
         "role": "$DB1_ROLE",
         "running": $DB1_RUNNING
       },
@@ -441,7 +463,7 @@ if [ "$OUTPUT_FORMAT" = "--json" ]; then
         "database_port": $PATRONI_DB2_PORT,
         "api_port": $PATRONI_DB2_API_PORT,
         "api_url": "http://localhost:${PATRONI_DB2_API_PORT}",
-        "connection_string": "postgresql://postgres:${POSTGRES_PASSWORD}@localhost:${PATRONI_DB2_PORT}/${DEFAULT_DATABASE}",
+        "connection_string": "postgresql://postgres:$(display_password "$POSTGRES_PASSWORD")@localhost:${PATRONI_DB2_PORT}/${DEFAULT_DATABASE}",
         "role": "$DB2_ROLE",
         "running": $DB2_RUNNING
       },
@@ -451,7 +473,7 @@ if [ "$OUTPUT_FORMAT" = "--json" ]; then
         "database_port": $PATRONI_DB3_PORT,
         "api_port": $PATRONI_DB3_API_PORT,
         "api_url": "http://localhost:${PATRONI_DB3_API_PORT}",
-        "connection_string": "postgresql://postgres:${POSTGRES_PASSWORD}@localhost:${PATRONI_DB3_PORT}/${DEFAULT_DATABASE}",
+        "connection_string": "postgresql://postgres:$(display_password "$POSTGRES_PASSWORD")@localhost:${PATRONI_DB3_PORT}/${DEFAULT_DATABASE}",
         "role": "$DB3_ROLE",
         "running": $DB3_RUNNING
       },
@@ -461,15 +483,15 @@ if [ "$OUTPUT_FORMAT" = "--json" ]; then
         "database_port": $PATRONI_DB4_PORT,
         "api_port": $PATRONI_DB4_API_PORT,
         "api_url": "http://localhost:${PATRONI_DB4_API_PORT}",
-        "connection_string": "postgresql://postgres:${POSTGRES_PASSWORD}@localhost:${PATRONI_DB4_PORT}/${DEFAULT_DATABASE}",
+        "connection_string": "postgresql://postgres:$(display_password "$POSTGRES_PASSWORD")@localhost:${PATRONI_DB4_PORT}/${DEFAULT_DATABASE}",
         "role": "$DB4_ROLE",
         "running": $DB4_RUNNING
       }
     ],
     "credentials": {
       "username": "postgres",
-      "password": "${POSTGRES_PASSWORD}",
-      "replicator_password": "${REPLICATOR_PASSWORD}",
+      "password": "$(display_password "$POSTGRES_PASSWORD")",
+      "replicator_password": "$(display_password "$REPLICATOR_PASSWORD")",
       "default_database": "${DEFAULT_DATABASE}"
     },
     "cluster_status_endpoint": "docker exec -it db1 patronictl -c /etc/patroni/patroni.yml list"
@@ -523,8 +545,8 @@ if [ "$OUTPUT_FORMAT" = "--json" ]; then
       "port": $HAPROXY_WRITE_PORT,
       "database": "${DEFAULT_DATABASE}",
       "username": "postgres",
-      "password": "${POSTGRES_PASSWORD}",
-      "connection_string": "postgresql://postgres:${POSTGRES_PASSWORD}@localhost:${HAPROXY_WRITE_PORT}/${DEFAULT_DATABASE}",
+      "password": "$(display_password "$POSTGRES_PASSWORD")",
+      "connection_string": "postgresql://postgres:$(display_password "$POSTGRES_PASSWORD")@localhost:${HAPROXY_WRITE_PORT}/${DEFAULT_DATABASE}",
       "description": "Routes to current leader, use for all write operations"
     },
     "recommended_read_endpoint": {
@@ -533,8 +555,8 @@ if [ "$OUTPUT_FORMAT" = "--json" ]; then
       "port": $HAPROXY_READ_PORT,
       "database": "${DEFAULT_DATABASE}",
       "username": "postgres",
-      "password": "${POSTGRES_PASSWORD}",
-      "connection_string": "postgresql://postgres:${POSTGRES_PASSWORD}@localhost:${HAPROXY_READ_PORT}/${DEFAULT_DATABASE}",
+      "password": "$(display_password "$POSTGRES_PASSWORD")",
+      "connection_string": "postgresql://postgres:$(display_password "$POSTGRES_PASSWORD")@localhost:${HAPROXY_READ_PORT}/${DEFAULT_DATABASE}",
       "description": "Routes to replicas in round-robin, use for read operations"
     },
     "monitoring": {
@@ -592,12 +614,12 @@ else
     echo "Write Endpoint (Leader):"
     echo "  Host: localhost"
     echo "  Port: $HAPROXY_WRITE_PORT"
-    echo "  Connection: postgresql://postgres:${POSTGRES_PASSWORD}@localhost:${HAPROXY_WRITE_PORT}/${DEFAULT_DATABASE}"
+    echo "  Connection: postgresql://postgres:$(display_password "$POSTGRES_PASSWORD")@localhost:${HAPROXY_WRITE_PORT}/${DEFAULT_DATABASE}"
     echo ""
     echo "Read Endpoint (Replicas):"
     echo "  Host: localhost"
     echo "  Port: $HAPROXY_READ_PORT"
-    echo "  Connection: postgresql://postgres:${POSTGRES_PASSWORD}@localhost:${HAPROXY_READ_PORT}/${DEFAULT_DATABASE}"
+    echo "  Connection: postgresql://postgres:$(display_password "$POSTGRES_PASSWORD")@localhost:${HAPROXY_READ_PORT}/${DEFAULT_DATABASE}"
     echo ""
     echo "Stats Endpoint:"
     echo "  URL: http://localhost:${HAPROXY_STATS_PORT}/stats"
@@ -610,7 +632,7 @@ else
     echo "  Database Port: $PATRONI_DB1_PORT"
     echo "  API Port: $PATRONI_DB1_API_PORT"
     echo "  Role: $DB1_ROLE"
-    echo "  Connection: postgresql://postgres:${POSTGRES_PASSWORD}@localhost:${PATRONI_DB1_PORT}/${DEFAULT_DATABASE}"
+    echo "  Connection: postgresql://postgres:$(display_password "$POSTGRES_PASSWORD")@localhost:${PATRONI_DB1_PORT}/${DEFAULT_DATABASE}"
     echo "  API: http://localhost:${PATRONI_DB1_API_PORT}"
     echo "  Status: $([ "$DB1_RUNNING" = true ] && echo "Running" || echo "Not Running")"
     echo ""
@@ -618,7 +640,7 @@ else
     echo "  Database Port: $PATRONI_DB2_PORT"
     echo "  API Port: $PATRONI_DB2_API_PORT"
     echo "  Role: $DB2_ROLE"
-    echo "  Connection: postgresql://postgres:${POSTGRES_PASSWORD}@localhost:${PATRONI_DB2_PORT}/${DEFAULT_DATABASE}"
+    echo "  Connection: postgresql://postgres:$(display_password "$POSTGRES_PASSWORD")@localhost:${PATRONI_DB2_PORT}/${DEFAULT_DATABASE}"
     echo "  API: http://localhost:${PATRONI_DB2_API_PORT}"
     echo "  Status: $([ "$DB2_RUNNING" = true ] && echo "Running" || echo "Not Running")"
     echo ""
@@ -626,7 +648,7 @@ else
     echo "  Database Port: $PATRONI_DB3_PORT"
     echo "  API Port: $PATRONI_DB3_API_PORT"
     echo "  Role: $DB3_ROLE"
-    echo "  Connection: postgresql://postgres:${POSTGRES_PASSWORD}@localhost:${PATRONI_DB3_PORT}/${DEFAULT_DATABASE}"
+    echo "  Connection: postgresql://postgres:$(display_password "$POSTGRES_PASSWORD")@localhost:${PATRONI_DB3_PORT}/${DEFAULT_DATABASE}"
     echo "  API: http://localhost:${PATRONI_DB3_API_PORT}"
     echo "  Status: $([ "$DB3_RUNNING" = true ] && echo "Running" || echo "Not Running")"
     echo ""
@@ -634,14 +656,14 @@ else
     echo "  Database Port: $PATRONI_DB4_PORT"
     echo "  API Port: $PATRONI_DB4_API_PORT"
     echo "  Role: $DB4_ROLE"
-    echo "  Connection: postgresql://postgres:${POSTGRES_PASSWORD}@localhost:${PATRONI_DB4_PORT}/${DEFAULT_DATABASE}"
+    echo "  Connection: postgresql://postgres:$(display_password "$POSTGRES_PASSWORD")@localhost:${PATRONI_DB4_PORT}/${DEFAULT_DATABASE}"
     echo "  API: http://localhost:${PATRONI_DB4_API_PORT}"
     echo "  Status: $([ "$DB4_RUNNING" = true ] && echo "Running" || echo "Not Running")"
     echo ""
     echo "Credentials:"
     echo "  Username: postgres"
-    echo "  Password: ${POSTGRES_PASSWORD}"
-    echo "  Replicator Password: ${REPLICATOR_PASSWORD}"
+    echo "  Password: $(display_password "$POSTGRES_PASSWORD")"
+    echo "  Replicator Password: $(display_password "$REPLICATOR_PASSWORD")"
     echo "  Default Database: ${DEFAULT_DATABASE}"
     echo ""
     echo "------------------------------------------"

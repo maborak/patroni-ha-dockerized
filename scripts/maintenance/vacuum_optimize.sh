@@ -109,7 +109,7 @@ if [ -f .env ]; then
     set +a
 fi
 
-POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-Dgo7cQ41WDTnd89G46TgfVtr}
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
 
 # Function to get port for a node
 # Note: Inside containers, PostgreSQL always listens on port 5431

@@ -101,10 +101,10 @@ PGPASS_FILE="$BARMAN_HOME/.pgpass"
 # Generate .pgpass entries for all database nodes
 # Format: host:*:*:user:password (matches Ansible template format)
 cat > "$PGPASS_FILE" <<EOF
-db1:*:*:postgres:${POSTGRES_PASSWORD:-Dgo7cQ41WDTnd89G46TgfVtr}
-db2:*:*:postgres:${POSTGRES_PASSWORD:-Dgo7cQ41WDTnd89G46TgfVtr}
-db3:*:*:postgres:${POSTGRES_PASSWORD:-Dgo7cQ41WDTnd89G46TgfVtr}
-db4:*:*:postgres:${POSTGRES_PASSWORD:-Dgo7cQ41WDTnd89G46TgfVtr}
+db1:*:*:postgres:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+db2:*:*:postgres:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+db3:*:*:postgres:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+db4:*:*:postgres:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
 EOF
 chmod 600 "$PGPASS_FILE"
 chown barman:barman "$PGPASS_FILE"

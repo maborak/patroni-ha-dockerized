@@ -24,7 +24,7 @@ if [ -f .env ]; then
     set +a
 fi
 
-POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-Dgo7cQ41WDTnd89G46TgfVtr}
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
 
 # Determine which node to connect to (prefer leader)
 LEADER_NODE=""

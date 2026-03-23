@@ -170,7 +170,7 @@ for node in "${NODES[@]}"; do
     # Get connection info from node
     # pgmetrics needs to connect from barman container to the node
     # We'll use the node's hostname and port
-    CONN_STRING="postgresql://postgres:${POSTGRES_PASSWORD:-Dgo7cQ41WDTnd89G46TgfVtr}@${node}:5431/postgres"
+    CONN_STRING="postgresql://postgres:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@${node}:5431/postgres"
     
     echo -e "${CYAN}  Collecting metrics...${NC}"
     start_time=$(date +%s)

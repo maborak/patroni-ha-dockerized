@@ -242,7 +242,7 @@ def main():
                        help="Database name")
     parser.add_argument("--user", default=os.getenv("DB_USER", "postgres"),
                        help="Database user")
-    parser.add_argument("--password", default=os.getenv("POSTGRES_PASSWORD", "Dgo7cQ41WDTnd89G46TgfVtr"),
+    parser.add_argument("--password", default=os.environ["POSTGRES_PASSWORD"],
                        help="Database password")
     parser.add_argument("--debug", action="store_true",
                        help="Enable debug output")

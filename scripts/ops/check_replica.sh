@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 # Health check script for HAProxy to check if a node is a replica
 # Returns 0 (success) if the node is a replica, 1 (failure) otherwise
 
