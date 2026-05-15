@@ -1,0 +1,17 @@
+{
+  "timestamp": "2026-04-18T07:23:06Z",
+  "node": "db3",
+  "cluster_statistics": {
+    "total_databases": 3,
+    "total_tables": 157,
+    "total_columns": 1566,
+    "total_rows": 66118,
+    "total_size": "4277MB",
+    "total_size_bytes": 4484724789
+  },
+  "databases": [
+    {"name": "legal", "tables": 70, "columns": 764, "rows": 63918, "size": "3591MB", "size_bytes": 3765615975},
+    {"name": "maborak", "tables": 56, "columns": 524, "rows": 2153, "size": "675MB", "size_bytes": 708156775},
+    {"name": "pazuzu", "tables": 31, "columns": 278, "rows": 47, "size": "10MB", "size_bytes": 10952039}
+  ]
+}

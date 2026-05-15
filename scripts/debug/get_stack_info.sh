@@ -6,15 +6,11 @@
 # Don't exit on error - we want to output info even if some checks fail
 set +e
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-MAGENTA='\033[0;35m'
-NC='\033[0m' # No Color
-BOLD='\033[1m'
+# Script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Load shared library (provides colors, .env, node discovery, leader detection)
+source "$SCRIPT_DIR/../lib/common.sh"
 
 # Progress indicator
 PROGRESS_COUNT=0
@@ -133,31 +129,13 @@ display_password() {
     fi
 }
 
-# Script directory
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR/.."
+# Change to project root (common.sh sets PROJECT_ROOT)
+cd "$PROJECT_ROOT"
 
-# Load environment variables from .env file
-if [ -f .env ]; then
-    set -a
-    source .env
-    set +a
-else
-    echo "Warning: .env file not found. Using default values." >&2
-fi
-
-# Set defaults if not set
+# Set defaults for ports not provided by common.sh
 HAPROXY_WRITE_PORT=${HAPROXY_WRITE_PORT:-5551}
 HAPROXY_READ_PORT=${HAPROXY_READ_PORT:-5552}
 HAPROXY_STATS_PORT=${HAPROXY_STATS_PORT:-5553}
-PATRONI_DB1_PORT=${PATRONI_DB1_PORT:-15431}
-PATRONI_DB1_API_PORT=${PATRONI_DB1_API_PORT:-8001}
-PATRONI_DB2_PORT=${PATRONI_DB2_PORT:-15432}
-PATRONI_DB2_API_PORT=${PATRONI_DB2_API_PORT:-8002}
-PATRONI_DB3_PORT=${PATRONI_DB3_PORT:-15433}
-PATRONI_DB3_API_PORT=${PATRONI_DB3_API_PORT:-8003}
-PATRONI_DB4_PORT=${PATRONI_DB4_PORT:-15434}
-PATRONI_DB4_API_PORT=${PATRONI_DB4_API_PORT:-8004}
 ETCD1_CLIENT_PORT=${ETCD1_CLIENT_PORT:-2379}
 ETCD2_CLIENT_PORT=${ETCD2_CLIENT_PORT:-22379}
 ETCD1_PEER_PORT=${ETCD1_PEER_PORT:-12380}
@@ -165,7 +143,9 @@ ETCD2_PEER_PORT=${ETCD2_PEER_PORT:-22380}
 BARMAN_PORT=${BARMAN_PORT:-5432}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
 REPLICATOR_PASSWORD=${REPLICATOR_PASSWORD:?Set REPLICATOR_PASSWORD in .env}
-DEFAULT_DATABASE=${DEFAULT_DATABASE:-maborak}
+
+# Build DB_NODES array from common.sh
+DB_NODES=($(get_db_nodes))
 
 # Use docker compose (v2) if available, otherwise docker-compose (v1)
 if docker compose version &> /dev/null 2>&1; then
@@ -225,10 +205,10 @@ check_etcd_health() {
 # Initialize status tracking
 STACK_HEALTHY=true
 CONTAINERS_RUNNING=0
-CONTAINERS_TOTAL=8
+CONTAINERS_TOTAL=$((PATRONI_NODES + 4))  # db nodes + etcd1 + etcd2 + haproxy + barman
 
 # Calculate total checks for progress
-PROGRESS_TOTAL=14  # 8 containers + 4 roles + 2 etcd health
+PROGRESS_TOTAL=$((CONTAINERS_TOTAL + PATRONI_NODES + 2))  # containers + roles + 2 etcd health
 
 # Show header for non-JSON output
 if [ "$OUTPUT_FORMAT" != "--json" ]; then
@@ -238,13 +218,12 @@ if [ "$OUTPUT_FORMAT" != "--json" ]; then
     echo "" >&2
 fi
 
-# Check containers
+# Check containers — use associative arrays for dynamic tracking
+declare -A NODE_RUNNING
+declare -A NODE_ROLE
+
 ETCD1_RUNNING=false
 ETCD2_RUNNING=false
-DB1_RUNNING=false
-DB2_RUNNING=false
-DB3_RUNNING=false
-DB4_RUNNING=false
 HAPROXY_RUNNING=false
 BARMAN_RUNNING=false
 
@@ -266,41 +245,18 @@ else
     print_status "etcd2 is not running" "fail"
 fi
 
-print_progress "Checking db1 container" "$CYAN"
-if is_container_running "db1"; then
-    DB1_RUNNING=true
-    ((CONTAINERS_RUNNING++))
-    print_status "db1 is running" "ok"
-else
-    print_status "db1 is not running" "fail"
-fi
-
-print_progress "Checking db2 container" "$CYAN"
-if is_container_running "db2"; then
-    DB2_RUNNING=true
-    ((CONTAINERS_RUNNING++))
-    print_status "db2 is running" "ok"
-else
-    print_status "db2 is not running" "fail"
-fi
-
-print_progress "Checking db3 container" "$CYAN"
-if is_container_running "db3"; then
-    DB3_RUNNING=true
-    ((CONTAINERS_RUNNING++))
-    print_status "db3 is running" "ok"
-else
-    print_status "db3 is not running" "fail"
-fi
-
-print_progress "Checking db4 container" "$CYAN"
-if is_container_running "db4"; then
-    DB4_RUNNING=true
-    ((CONTAINERS_RUNNING++))
-    print_status "db4 is running" "ok"
-else
-    print_status "db4 is not running" "fail"
-fi
+# Check DB node containers dynamically
+for db in "${DB_NODES[@]}"; do
+    NODE_RUNNING[$db]=false
+    print_progress "Checking $db container" "$CYAN"
+    if is_container_running "$db"; then
+        NODE_RUNNING[$db]=true
+        ((CONTAINERS_RUNNING++))
+        print_status "$db is running" "ok"
+    else
+        print_status "$db is not running" "fail"
+    fi
+done
 
 print_progress "Checking haproxy container" "$CYAN"
 if is_container_running "haproxy"; then
@@ -321,58 +277,21 @@ else
 fi
 
 # Get Patroni roles (API port is 8001 inside container)
-DB1_ROLE="unknown"
-DB2_ROLE="unknown"
-DB3_ROLE="unknown"
-DB4_ROLE="unknown"
-
-print_progress "Checking db1 Patroni role" "$MAGENTA"
-if [ "$DB1_RUNNING" = true ]; then
-    DB1_ROLE=$(get_patroni_role "db1" "8001" 2>/dev/null || echo "unknown")
-    if [ "$DB1_ROLE" != "unknown" ]; then
-        print_status "db1 role: $DB1_ROLE" "ok"
+INTERNAL_API_PORT=$(get_internal_api_port)
+for db in "${DB_NODES[@]}"; do
+    NODE_ROLE[$db]="unknown"
+    print_progress "Checking $db Patroni role" "$MAGENTA"
+    if [ "${NODE_RUNNING[$db]}" = true ]; then
+        NODE_ROLE[$db]=$(get_patroni_role "$db" "$INTERNAL_API_PORT" 2>/dev/null || echo "unknown")
+        if [ "${NODE_ROLE[$db]}" != "unknown" ]; then
+            print_status "$db role: ${NODE_ROLE[$db]}" "ok"
+        else
+            print_status "$db role: unknown" "warn"
+        fi
     else
-        print_status "db1 role: unknown" "warn"
+        print_status "$db not running, skipping role check" "warn"
     fi
-else
-    print_status "db1 not running, skipping role check" "warn"
-fi
-
-print_progress "Checking db2 Patroni role" "$MAGENTA"
-if [ "$DB2_RUNNING" = true ]; then
-    DB2_ROLE=$(get_patroni_role "db2" "8001" 2>/dev/null || echo "unknown")
-    if [ "$DB2_ROLE" != "unknown" ]; then
-        print_status "db2 role: $DB2_ROLE" "ok"
-    else
-        print_status "db2 role: unknown" "warn"
-    fi
-else
-    print_status "db2 not running, skipping role check" "warn"
-fi
-
-print_progress "Checking db3 Patroni role" "$MAGENTA"
-if [ "$DB3_RUNNING" = true ]; then
-    DB3_ROLE=$(get_patroni_role "db3" "8001" 2>/dev/null || echo "unknown")
-    if [ "$DB3_ROLE" != "unknown" ]; then
-        print_status "db3 role: $DB3_ROLE" "ok"
-    else
-        print_status "db3 role: unknown" "warn"
-    fi
-else
-    print_status "db3 not running, skipping role check" "warn"
-fi
-
-print_progress "Checking db4 Patroni role" "$MAGENTA"
-if [ "$DB4_RUNNING" = true ]; then
-    DB4_ROLE=$(get_patroni_role "db4" "8001" 2>/dev/null || echo "unknown")
-    if [ "$DB4_ROLE" != "unknown" ]; then
-        print_status "db4 role: $DB4_ROLE" "ok"
-    else
-        print_status "db4 role: unknown" "warn"
-    fi
-else
-    print_status "db4 not running, skipping role check" "warn"
-fi
+done
 
 # Check etcd health
 ETCD1_HEALTH="unknown"
@@ -421,7 +340,61 @@ if [ "$CONTAINERS_RUNNING" -lt "$CONTAINERS_TOTAL" ]; then
 fi
 
 # Build JSON output
+# Pre-build dynamic JSON fragments for patroni nodes, logs, etc.
+_build_patroni_nodes_json() {
+    local first=true
+    for db in "${DB_NODES[@]}"; do
+        local num=$(get_node_num "$db")
+        local db_port=$(get_db_port "$num")
+        local api_port=$(get_api_port "$num")
+        if [ "$first" = true ]; then first=false; else echo ","; fi
+        cat <<NODEEOF
+      {
+        "name": "$db",
+        "host": "localhost",
+        "database_port": $db_port,
+        "api_port": $api_port,
+        "api_url": "http://localhost:${api_port}",
+        "connection_string": "postgresql://postgres:$(display_password "$POSTGRES_PASSWORD")@localhost:${db_port}/${DEFAULT_DATABASE}",
+        "role": "${NODE_ROLE[$db]}",
+        "running": ${NODE_RUNNING[$db]}
+      }
+NODEEOF
+    done
+}
+
+_build_patroni_logs_json() {
+    local first=true
+    for db in "${DB_NODES[@]}"; do
+        if [ "$first" = true ]; then first=false; else echo ","; fi
+        printf '        "%s": "%s logs -f %s"' "$db" "$DOCKER_COMPOSE" "$db"
+    done
+    # Add all_patroni entry
+    local all_nodes="${DB_NODES[*]}"
+    echo ","
+    printf '        "all_patroni": "%s logs -f %s"' "$DOCKER_COMPOSE" "$all_nodes"
+}
+
+_build_json_logs_json() {
+    local first=true
+    for db in "${DB_NODES[@]}"; do
+        if [ "$first" = true ]; then first=false; else echo ","; fi
+        printf '        "%s": "docker exec -it %s sh -c '"'"'tail -f /var/log/postgresql/*.json'"'"'"' "$db" "$db"
+    done
+}
+
+_build_archive_logs_json() {
+    local first=true
+    for db in "${DB_NODES[@]}"; do
+        if [ "$first" = true ]; then first=false; else echo ","; fi
+        printf '        "%s": "docker exec -it %s tail -f /var/log/postgresql/archive.log"' "$db" "$db"
+    done
+}
+
+FIRST_API_PORT=$(get_api_port 1)
+
 if [ "$OUTPUT_FORMAT" = "--json" ]; then
+    # Use a subshell approach to build JSON with dynamic node entries
     cat <<EOF
 {
   "stack": {
@@ -447,46 +420,7 @@ if [ "$OUTPUT_FORMAT" = "--json" ]; then
   },
   "patroni": {
     "nodes": [
-      {
-        "name": "db1",
-        "host": "localhost",
-        "database_port": $PATRONI_DB1_PORT,
-        "api_port": $PATRONI_DB1_API_PORT,
-        "api_url": "http://localhost:${PATRONI_DB1_API_PORT}",
-        "connection_string": "postgresql://postgres:$(display_password "$POSTGRES_PASSWORD")@localhost:${PATRONI_DB1_PORT}/${DEFAULT_DATABASE}",
-        "role": "$DB1_ROLE",
-        "running": $DB1_RUNNING
-      },
-      {
-        "name": "db2",
-        "host": "localhost",
-        "database_port": $PATRONI_DB2_PORT,
-        "api_port": $PATRONI_DB2_API_PORT,
-        "api_url": "http://localhost:${PATRONI_DB2_API_PORT}",
-        "connection_string": "postgresql://postgres:$(display_password "$POSTGRES_PASSWORD")@localhost:${PATRONI_DB2_PORT}/${DEFAULT_DATABASE}",
-        "role": "$DB2_ROLE",
-        "running": $DB2_RUNNING
-      },
-      {
-        "name": "db3",
-        "host": "localhost",
-        "database_port": $PATRONI_DB3_PORT,
-        "api_port": $PATRONI_DB3_API_PORT,
-        "api_url": "http://localhost:${PATRONI_DB3_API_PORT}",
-        "connection_string": "postgresql://postgres:$(display_password "$POSTGRES_PASSWORD")@localhost:${PATRONI_DB3_PORT}/${DEFAULT_DATABASE}",
-        "role": "$DB3_ROLE",
-        "running": $DB3_RUNNING
-      },
-      {
-        "name": "db4",
-        "host": "localhost",
-        "database_port": $PATRONI_DB4_PORT,
-        "api_port": $PATRONI_DB4_API_PORT,
-        "api_url": "http://localhost:${PATRONI_DB4_API_PORT}",
-        "connection_string": "postgresql://postgres:$(display_password "$POSTGRES_PASSWORD")@localhost:${PATRONI_DB4_PORT}/${DEFAULT_DATABASE}",
-        "role": "$DB4_ROLE",
-        "running": $DB4_RUNNING
-      }
+$(_build_patroni_nodes_json)
     ],
     "credentials": {
       "username": "postgres",
@@ -494,7 +428,7 @@ if [ "$OUTPUT_FORMAT" = "--json" ]; then
       "replicator_password": "$(display_password "$REPLICATOR_PASSWORD")",
       "default_database": "${DEFAULT_DATABASE}"
     },
-    "cluster_status_endpoint": "docker exec -it db1 patronictl -c /etc/patroni/patroni.yml list"
+    "cluster_status_endpoint": "docker exec -it ${DB_NODES[0]} patronictl -c /etc/patroni/patroni.yml list"
   },
   "etcd": {
     "nodes": [
@@ -561,18 +495,14 @@ if [ "$OUTPUT_FORMAT" = "--json" ]; then
     },
     "monitoring": {
       "haproxy_stats": "http://localhost:${HAPROXY_STATS_PORT}/stats",
-      "patroni_api_base": "http://localhost:${PATRONI_DB1_API_PORT}",
-      "patroni_cluster_status": "docker exec -it db1 patronictl -c /etc/patroni/patroni.yml list"
+      "patroni_api_base": "http://localhost:${FIRST_API_PORT}",
+      "patroni_cluster_status": "docker exec -it ${DB_NODES[0]} patronictl -c /etc/patroni/patroni.yml list"
     },
     "logs": {
       "all_services": "$DOCKER_COMPOSE logs -f",
       "all_services_tail": "$DOCKER_COMPOSE logs --tail=100",
       "patroni_nodes": {
-        "db1": "$DOCKER_COMPOSE logs -f db1",
-        "db2": "$DOCKER_COMPOSE logs -f db2",
-        "db3": "$DOCKER_COMPOSE logs -f db3",
-        "db4": "$DOCKER_COMPOSE logs -f db4",
-        "all_patroni": "$DOCKER_COMPOSE logs -f db1 db2 db3 db4"
+$(_build_patroni_logs_json)
       },
       "haproxy": "$DOCKER_COMPOSE logs -f haproxy",
       "barman": "$DOCKER_COMPOSE logs -f barman",
@@ -582,16 +512,10 @@ if [ "$OUTPUT_FORMAT" = "--json" ]; then
         "all_etcd": "$DOCKER_COMPOSE logs -f etcd1 etcd2"
       },
       "postgresql_json_logs": {
-        "db1": "docker exec -it db1 sh -c 'tail -f /var/log/postgresql/*.json'",
-        "db2": "docker exec -it db2 sh -c 'tail -f /var/log/postgresql/*.json'",
-        "db3": "docker exec -it db3 sh -c 'tail -f /var/log/postgresql/*.json'",
-        "db4": "docker exec -it db4 sh -c 'tail -f /var/log/postgresql/*.json'"
+$(_build_json_logs_json)
       },
       "archive_logs": {
-        "db1": "docker exec -it db1 tail -f /var/log/postgresql/archive.log",
-        "db2": "docker exec -it db2 tail -f /var/log/postgresql/archive.log",
-        "db3": "docker exec -it db3 tail -f /var/log/postgresql/archive.log",
-        "db4": "docker exec -it db4 tail -f /var/log/postgresql/archive.log"
+$(_build_archive_logs_json)
       },
       "barman_logs": "docker exec -it barman tail -f /var/log/barman/barman.log"
     }
@@ -628,38 +552,19 @@ else
     echo "------------------------------------------"
     echo "Patroni Nodes"
     echo "------------------------------------------"
-    echo "db1:"
-    echo "  Database Port: $PATRONI_DB1_PORT"
-    echo "  API Port: $PATRONI_DB1_API_PORT"
-    echo "  Role: $DB1_ROLE"
-    echo "  Connection: postgresql://postgres:$(display_password "$POSTGRES_PASSWORD")@localhost:${PATRONI_DB1_PORT}/${DEFAULT_DATABASE}"
-    echo "  API: http://localhost:${PATRONI_DB1_API_PORT}"
-    echo "  Status: $([ "$DB1_RUNNING" = true ] && echo "Running" || echo "Not Running")"
-    echo ""
-    echo "db2:"
-    echo "  Database Port: $PATRONI_DB2_PORT"
-    echo "  API Port: $PATRONI_DB2_API_PORT"
-    echo "  Role: $DB2_ROLE"
-    echo "  Connection: postgresql://postgres:$(display_password "$POSTGRES_PASSWORD")@localhost:${PATRONI_DB2_PORT}/${DEFAULT_DATABASE}"
-    echo "  API: http://localhost:${PATRONI_DB2_API_PORT}"
-    echo "  Status: $([ "$DB2_RUNNING" = true ] && echo "Running" || echo "Not Running")"
-    echo ""
-    echo "db3:"
-    echo "  Database Port: $PATRONI_DB3_PORT"
-    echo "  API Port: $PATRONI_DB3_API_PORT"
-    echo "  Role: $DB3_ROLE"
-    echo "  Connection: postgresql://postgres:$(display_password "$POSTGRES_PASSWORD")@localhost:${PATRONI_DB3_PORT}/${DEFAULT_DATABASE}"
-    echo "  API: http://localhost:${PATRONI_DB3_API_PORT}"
-    echo "  Status: $([ "$DB3_RUNNING" = true ] && echo "Running" || echo "Not Running")"
-    echo ""
-    echo "db4:"
-    echo "  Database Port: $PATRONI_DB4_PORT"
-    echo "  API Port: $PATRONI_DB4_API_PORT"
-    echo "  Role: $DB4_ROLE"
-    echo "  Connection: postgresql://postgres:$(display_password "$POSTGRES_PASSWORD")@localhost:${PATRONI_DB4_PORT}/${DEFAULT_DATABASE}"
-    echo "  API: http://localhost:${PATRONI_DB4_API_PORT}"
-    echo "  Status: $([ "$DB4_RUNNING" = true ] && echo "Running" || echo "Not Running")"
-    echo ""
+    for db in "${DB_NODES[@]}"; do
+        _num=$(get_node_num "$db")
+        _db_port=$(get_db_port "$_num")
+        _api_port=$(get_api_port "$_num")
+        echo "$db:"
+        echo "  Database Port: $_db_port"
+        echo "  API Port: $_api_port"
+        echo "  Role: ${NODE_ROLE[$db]}"
+        echo "  Connection: postgresql://postgres:$(display_password "$POSTGRES_PASSWORD")@localhost:${_db_port}/${DEFAULT_DATABASE}"
+        echo "  API: http://localhost:${_api_port}"
+        echo "  Status: $([ "${NODE_RUNNING[$db]}" = true ] && echo "Running" || echo "Not Running")"
+        echo ""
+    done
     echo "Credentials:"
     echo "  Username: postgres"
     echo "  Password: $(display_password "$POSTGRES_PASSWORD")"
@@ -706,20 +611,13 @@ else
     echo "  $DOCKER_COMPOSE logs --tail=100"
     echo ""
     echo -e "${CYAN}${BOLD}Patroni Nodes:${NC}"
-    echo "  # Follow db1 logs"
-    echo "  $DOCKER_COMPOSE logs -f db1"
-    echo ""
-    echo "  # Follow db2 logs"
-    echo "  $DOCKER_COMPOSE logs -f db2"
-    echo ""
-    echo "  # Follow db3 logs"
-    echo "  $DOCKER_COMPOSE logs -f db3"
-    echo ""
-    echo "  # Follow db4 logs"
-    echo "  $DOCKER_COMPOSE logs -f db4"
-    echo ""
+    for db in "${DB_NODES[@]}"; do
+        echo "  # Follow $db logs"
+        echo "  $DOCKER_COMPOSE logs -f $db"
+        echo ""
+    done
     echo "  # Follow all Patroni nodes"
-    echo "  $DOCKER_COMPOSE logs -f db1 db2 db3 db4"
+    echo "  $DOCKER_COMPOSE logs -f ${DB_NODES[*]}"
     echo ""
     echo -e "${CYAN}${BOLD}HAProxy:${NC}"
     echo "  # Follow HAProxy logs"
@@ -743,30 +641,17 @@ else
     echo "  $DOCKER_COMPOSE logs -f etcd1 etcd2"
     echo ""
     echo -e "${CYAN}${BOLD}PostgreSQL JSON Logs:${NC}"
-    echo "  # Follow PostgreSQL JSON logs (db1)"
-    echo "  docker exec -it db1 sh -c 'tail -f /var/log/postgresql/*.json'"
-    echo ""
-    echo "  # Follow PostgreSQL JSON logs (db2)"
-    echo "  docker exec -it db2 sh -c 'tail -f /var/log/postgresql/*.json'"
-    echo ""
-    echo "  # Follow PostgreSQL JSON logs (db3)"
-    echo "  docker exec -it db3 sh -c 'tail -f /var/log/postgresql/*.json'"
-    echo ""
-    echo "  # Follow PostgreSQL JSON logs (db4)"
-    echo "  docker exec -it db4 sh -c 'tail -f /var/log/postgresql/*.json'"
-    echo ""
+    for db in "${DB_NODES[@]}"; do
+        echo "  # Follow PostgreSQL JSON logs ($db)"
+        echo "  docker exec -it $db sh -c 'tail -f /var/log/postgresql/*.json'"
+        echo ""
+    done
     echo -e "${CYAN}${BOLD}WAL Archive Logs:${NC}"
-    echo "  # Follow archive logs (db1)"
-    echo "  docker exec -it db1 tail -f /var/log/postgresql/archive.log"
-    echo ""
-    echo "  # Follow archive logs (db2)"
-    echo "  docker exec -it db2 tail -f /var/log/postgresql/archive.log"
-    echo ""
-    echo "  # Follow archive logs (db3)"
-    echo "  docker exec -it db3 tail -f /var/log/postgresql/archive.log"
-    echo ""
-    echo "  # Follow archive logs (db4)"
-    echo "  docker exec -it db4 tail -f /var/log/postgresql/archive.log"
+    for db in "${DB_NODES[@]}"; do
+        echo "  # Follow archive logs ($db)"
+        echo "  docker exec -it $db tail -f /var/log/postgresql/archive.log"
+        echo ""
+    done
     echo ""
     echo "=========================================="
 fi

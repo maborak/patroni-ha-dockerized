@@ -69,6 +69,16 @@ if [ -f /ssh_keys/barman_rsa.pub ]; then
     echo "SSH key added to root authorized_keys"
 fi
 
+# Generate node-specific Patroni config from template
+# The template uses __NODE_NAME__ placeholder, replaced with container hostname (db1, db2, etc.)
+if [ -f /etc/patroni/patroni.yml.tpl ]; then
+    NODE_NAME=$(hostname)
+    echo "Generating Patroni config for node: $NODE_NAME"
+    sed "s/__NODE_NAME__/${NODE_NAME}/g" \
+        /etc/patroni/patroni.yml.tpl > /etc/patroni/patroni.yml
+    chown postgres:postgres /etc/patroni/patroni.yml
+fi
+
 # SSH daemon will be started by supervisor
 echo "SSH daemon will be started by supervisor"
 

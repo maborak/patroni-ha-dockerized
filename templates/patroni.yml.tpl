@@ -1,11 +1,11 @@
 scope: patroni1
-name: db3
+name: __NODE_NAME__
 namespace: /patroni1
 retry_timeout: 10
 
 restapi:
   listen: 0.0.0.0:8001
-  connect_address: db3:8001
+  connect_address: __NODE_NAME__:8001
 
 etcd3:
   hosts: etcd1:2379,etcd2:2379,etcd3:2379
@@ -148,7 +148,7 @@ bootstrap:
 
 postgresql:
   listen: 0.0.0.0:5431
-  connect_address: db3:5431
+  connect_address: __NODE_NAME__:5431
   use_unix_socket: true
   data_dir: /var/lib/postgresql/15/patroni1
   bin_dir: /usr/lib/postgresql/15/bin
@@ -170,10 +170,11 @@ postgresql:
   basebackup:
     max-rate: '100M'
     checkpoint: 'fast'
+  recovery_conf:
+    restore_command: 'rsync -e "ssh -i /home/postgres/.ssh/barman_rsa -p 22 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" -a barman@barman:/data/pg-backup/__NODE_NAME__/wals/*/%f /tmp/%f 2>/dev/null && (gunzip -c /tmp/%f > %p 2>/dev/null || cp /tmp/%f %p) && rm -f /tmp/%f || exit 0'
 
 tags:
   nofailover: false
   noloadbalance: false
   clonefrom: false
   nosync: false
-

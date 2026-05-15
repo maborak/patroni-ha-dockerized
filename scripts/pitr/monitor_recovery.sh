@@ -4,27 +4,12 @@
 
 set -e
 
-# Colors for output
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m' # No Color
-BOLD='\033[1m'
-
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR/.."
 
-# Load environment variables
-if [ -f .env ]; then
-    set -a
-    source .env
-    set +a
-fi
+# Load shared library (provides colors, .env, node discovery, leader detection)
+source "$SCRIPT_DIR/../lib/common.sh"
 
-DEFAULT_DATABASE=${DEFAULT_DATABASE:-maborak}
 REFRESH_INTERVAL=${2:-2}
 
 # If node is specified, use it; otherwise detect leader
@@ -49,8 +34,8 @@ else
     
     # Fallback: Try REST API
     if [ -z "$DEFAULT_NODE" ]; then
-        for node in db1 db2 db3 db4; do
-            role=$(docker exec "$node" sh -c "curl -s http://localhost:8001/patroni 2>/dev/null | python3 -c 'import sys, json; print(json.load(sys.stdin).get(\"role\", \"unknown\"))'" 2>/dev/null || echo "unknown")
+        for node in $(get_db_nodes); do
+            role=$(docker exec "$node" sh -c "curl -s http://localhost:$(get_internal_api_port)/patroni 2>/dev/null | python3 -c 'import sys, json; print(json.load(sys.stdin).get(\"role\", \"unknown\"))'" 2>/dev/null || echo "unknown")
             if [ "$role" = "primary" ] || [ "$role" = "Leader" ]; then
                 DEFAULT_NODE="$node"
                 echo -e "${GREEN}✓ Found leader via REST API: ${DEFAULT_NODE}${NC}" >&2

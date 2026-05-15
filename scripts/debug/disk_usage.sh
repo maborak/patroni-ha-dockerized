@@ -6,17 +6,9 @@
 
 set -euo pipefail
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m'
-BOLD='\033[1m'
-
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/common.sh"
 PROJECT_DIR="$SCRIPT_DIR/../.."
 
 OUTPUT_FORMAT="human"
@@ -29,14 +21,16 @@ for arg in "$@"; do
 done
 
 # DB nodes that have PostgreSQL logs
-DB_NODES=(db1 db2 db3 db4)
+DB_NODES=($(get_db_nodes))
 PG_LOG_DIR="/var/log/postgresql"
 
 # Services from docker-compose
-SERVICES=(etcd1 etcd2 db1 db2 db3 db4 barman haproxy pgbouncer pgbouncer-ro)
+SERVICES=(etcd1 etcd2 etcd3 $(get_db_nodes) barman haproxy pgbouncer pgbouncer-ro)
 
 # Named volumes from docker-compose
-VOLUMES=(etcd1_data etcd2_data db1_data db2_data db3_data db4_data barman_data barman_backup)
+VOLUMES=(etcd1_data etcd2_data etcd3_data)
+for db in $(get_db_nodes); do VOLUMES+=("${db}_data"); done
+VOLUMES+=(barman_data barman_backup)
 
 # Get the docker-compose project name prefix
 # Docker Compose uses the directory name lowercased as the volume prefix

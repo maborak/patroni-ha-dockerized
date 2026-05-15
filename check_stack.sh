@@ -1,41 +1,21 @@
 #!/bin/bash
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
-
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Load environment variables from .env file
-if [ -f .env ]; then
-    set -a
-    source .env
-    set +a
-else
-    echo -e "${YELLOW}Warning: .env file not found. Using default values.${NC}"
-fi
+# Load shared library (provides colors, .env, node discovery, leader detection)
+source "scripts/lib/common.sh"
 
-# Set defaults if not set
+# Build DB_NODES array from common.sh
+DB_NODES=($(get_db_nodes))
+
+# Set defaults for ports not provided by common.sh
 HAPROXY_WRITE_PORT=${HAPROXY_WRITE_PORT:-5551}
 HAPROXY_READ_PORT=${HAPROXY_READ_PORT:-5552}
 HAPROXY_STATS_PORT=${HAPROXY_STATS_PORT:-5553}
-PATRONI_DB1_PORT=${PATRONI_DB1_PORT:-15431}
-PATRONI_DB1_API_PORT=${PATRONI_DB1_API_PORT:-8001}
-PATRONI_DB2_PORT=${PATRONI_DB2_PORT:-15432}
-PATRONI_DB2_API_PORT=${PATRONI_DB2_API_PORT:-8002}
-PATRONI_DB3_PORT=${PATRONI_DB3_PORT:-15433}
-PATRONI_DB3_API_PORT=${PATRONI_DB3_API_PORT:-8003}
-PATRONI_DB4_PORT=${PATRONI_DB4_PORT:-15434}
-PATRONI_DB4_API_PORT=${PATRONI_DB4_API_PORT:-8004}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
 REPLICATOR_PASSWORD=${REPLICATOR_PASSWORD:?Set REPLICATOR_PASSWORD in .env}
-DEFAULT_DATABASE=${DEFAULT_DATABASE:-maborak}
 PGBOUNCER_PORT=${PGBOUNCER_PORT:-6432}
 PGBOUNCER_RO_PORT=${PGBOUNCER_RO_PORT:-6433}
 
@@ -133,10 +113,9 @@ echo -e "${YELLOW}Checking containers...${NC}"
 check_container "etcd1"
 check_container "etcd2"
 check_container "etcd3"
-check_container "db1"
-check_container "db2"
-check_container "db3"
-check_container "db4"
+for db in "${DB_NODES[@]}"; do
+    check_container "$db"
+done
 check_container "haproxy"
 check_container "barman"
 check_container "pgbouncer"
@@ -167,18 +146,18 @@ echo ""
 # Check Patroni REST API (from inside containers)
 echo -e "${YELLOW}Checking Patroni REST API...${NC}"
 # Use Python to parse JSON properly - Patroni API is on port 8001 inside containers
-DB1_ROLE=$(docker exec db1 sh -c "curl -s http://localhost:8001/patroni 2>/dev/null | python3 -c 'import sys, json; print(json.load(sys.stdin).get(\"role\", \"unknown\"))'" 2>/dev/null || echo "unknown")
-DB2_ROLE=$(docker exec db2 sh -c "curl -s http://localhost:8001/patroni 2>/dev/null | python3 -c 'import sys, json; print(json.load(sys.stdin).get(\"role\", \"unknown\"))'" 2>/dev/null || echo "unknown")
-DB3_ROLE=$(docker exec db3 sh -c "curl -s http://localhost:8001/patroni 2>/dev/null | python3 -c 'import sys, json; print(json.load(sys.stdin).get(\"role\", \"unknown\"))'" 2>/dev/null || echo "unknown")
-DB4_ROLE=$(docker exec db4 sh -c "curl -s http://localhost:8001/patroni 2>/dev/null | python3 -c 'import sys, json; print(json.load(sys.stdin).get(\"role\", \"unknown\"))'" 2>/dev/null || echo "unknown")
+INTERNAL_API_PORT=$(get_internal_api_port)
+declare -A DB_ROLE
+for db in "${DB_NODES[@]}"; do
+    DB_ROLE[$db]=$(docker exec "$db" sh -c "curl -s http://localhost:${INTERNAL_API_PORT}/patroni 2>/dev/null | python3 -c 'import sys, json; print(json.load(sys.stdin).get(\"role\", \"unknown\"))'" 2>/dev/null || echo "unknown")
+done
 
-for db in "db1:$DB1_ROLE" "db2:$DB2_ROLE" "db3:$DB3_ROLE" "db4:$DB4_ROLE"; do
-    db_name=$(echo $db | cut -d: -f1)
-    db_role=$(echo $db | cut -d: -f2)
+for db in "${DB_NODES[@]}"; do
+    db_role="${DB_ROLE[$db]}"
     if [ "$db_role" = "Leader" ] || [ "$db_role" = "Replica" ] || [ "$db_role" = "primary" ] || [ "$db_role" = "replica" ]; then
-        echo -e "${GREEN}✓ ${db_name} Patroni API: ${db_role}${NC}"
+        echo -e "${GREEN}✓ ${db} Patroni API: ${db_role}${NC}"
     else
-        echo -e "${RED}✗ ${db_name} Patroni API: ${db_role} (not responding properly)${NC}"
+        echo -e "${RED}✗ ${db} Patroni API: ${db_role} (not responding properly)${NC}"
     fi
 done
 echo ""
@@ -187,8 +166,10 @@ echo ""
 echo ""
 echo -e "${YELLOW}=== Split-Brain Detection ===${NC}"
 LEADER_COUNT=0
-for db in db1 db2 db3 db4; do
-    role=$(curl -s "http://localhost:$(docker port $db 8001 2>/dev/null | cut -d: -f2)/patroni" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('role',''))" 2>/dev/null)
+for db in "${DB_NODES[@]}"; do
+    local_num=$(get_node_num "$db")
+    local_api_port=$(get_api_port "$local_num")
+    role=$(curl -s "http://localhost:${local_api_port}/patroni" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('role',''))" 2>/dev/null)
     if [ "$role" = "master" ] || [ "$role" = "primary" ]; then
         LEADER_COUNT=$((LEADER_COUNT + 1))
     fi
@@ -206,8 +187,10 @@ echo ""
 echo -e "${YELLOW}=== Replication Lag ===${NC}"
 # Find leader container
 LEADER_CONTAINER=""
-for db in db1 db2 db3 db4; do
-    role=$(curl -s "http://localhost:$(docker port $db 8001 2>/dev/null | cut -d: -f2)/patroni" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('role',''))" 2>/dev/null)
+for db in "${DB_NODES[@]}"; do
+    local_num=$(get_node_num "$db")
+    local_api_port=$(get_api_port "$local_num")
+    role=$(curl -s "http://localhost:${local_api_port}/patroni" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('role',''))" 2>/dev/null)
     if [ "$role" = "master" ] || [ "$role" = "primary" ]; then
         LEADER_CONTAINER=$db
         break
@@ -237,7 +220,7 @@ fi
 # Barman backup status
 echo ""
 echo -e "${YELLOW}=== Barman Backup Status ===${NC}"
-for srv in db1 db2 db3 db4; do
+for srv in "${DB_NODES[@]}"; do
     BARMAN_CHECK=$(docker exec barman barman check "$srv" --nagios 2>/dev/null)
     BARMAN_EXIT=$?
     if [ $BARMAN_EXIT -eq 0 ]; then
@@ -252,7 +235,7 @@ echo ""
 
 # Check PostgreSQL connectivity
 echo -e "${YELLOW}Checking PostgreSQL connectivity...${NC}"
-for db in db1 db2 db3 db4; do
+for db in "${DB_NODES[@]}"; do
     if docker exec -it $db pg_isready -U postgres -p 5431 > /dev/null 2>&1; then
         echo -e "${GREEN}✓ ${db} PostgreSQL: Ready${NC}"
     else
@@ -324,7 +307,7 @@ check_key_permissions() {
 
 # Check SSH keys for Patroni nodes (to connect to Barman)
 echo -e "${BLUE}  Patroni nodes SSH keys (for Barman access):${NC}"
-for db in db1 db2 db3 db4; do
+for db in "${DB_NODES[@]}"; do
     if docker ps --format '{{.Names}}' | grep -q "^${db}$"; then
         # Get postgres home directory (usually /var/lib/postgresql)
         POSTGRES_HOME=$(docker exec "$db" getent passwd postgres 2>/dev/null | cut -d: -f6 || echo "/var/lib/postgresql")
@@ -393,7 +376,7 @@ fi
 
 # Check for PITR-specific scenarios
 echo -e "${BLUE}  PITR-specific key checks (for perform_pitr.sh):${NC}"
-for db in db1 db2 db3 db4; do
+for db in "${DB_NODES[@]}"; do
     if docker ps --format '{{.Names}}' | grep -q "^${db}$"; then
         # Check if key exists in location perform_pitr.sh expects for barman-wal-restore
         POSTGRES_HOME=$(docker exec "$db" getent passwd postgres 2>/dev/null | cut -d: -f6 || echo "/var/lib/postgresql")
@@ -502,7 +485,7 @@ extract_ssh_error() {
 SSH_PATRONI_TO_BARMAN_SUCCESS=0
 SSH_PATRONI_TO_BARMAN_FAIL=0
 echo -e "${BLUE}  From Patroni nodes to Barman:${NC}"
-for db in db1 db2 db3 db4; do
+for db in "${DB_NODES[@]}"; do
     if docker ps --format '{{.Names}}' | grep -q "^${db}$"; then
         # Get postgres home directory for SSH key location
         POSTGRES_HOME=$(docker exec "$db" getent passwd postgres 2>/dev/null | cut -d: -f6 || echo "/var/lib/postgresql")
@@ -552,7 +535,7 @@ if docker ps --format '{{.Names}}' | grep -q "^barman$"; then
     # Get Barman's home directory
     BARMAN_HOME=$(docker exec barman getent passwd barman 2>/dev/null | cut -d: -f6 || echo "/var/lib/barman")
     
-    for db in db1 db2 db3 db4; do
+    for db in "${DB_NODES[@]}"; do
         if docker ps --format '{{.Names}}' | grep -q "^${db}$"; then
             # Check as barman user
             SSH_OUTPUT=$(docker exec -u barman barman ssh -i "$BARMAN_HOME/.ssh/id_rsa" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o ServerAliveInterval=2 -o ServerAliveCountMax=3 postgres@${db} 'echo SSH_SUCCESS' 2>&1)
@@ -599,12 +582,12 @@ fi
 SSH_PATRONI_TO_PATRONI_SUCCESS=0
 SSH_PATRONI_TO_PATRONI_FAIL=0
 echo -e "${BLUE}  From Patroni nodes to other Patroni nodes:${NC}"
-for db_from in db1 db2 db3 db4; do
+for db_from in "${DB_NODES[@]}"; do
     if docker ps --format '{{.Names}}' | grep -q "^${db_from}$"; then
         # Get postgres home directory for SSH key location
         POSTGRES_HOME=$(docker exec "$db_from" getent passwd postgres 2>/dev/null | cut -d: -f6 || echo "/var/lib/postgresql")
         
-        for db_to in db1 db2 db3 db4; do
+        for db_to in "${DB_NODES[@]}"; do
             # Skip self-connection
             if [ "$db_from" = "$db_to" ]; then
                 continue
@@ -668,27 +651,20 @@ if check_port "localhost" "2379" "etcd1"; then ((PORT_SUCCESS++)); fi
 ((PORT_CHECKS++))
 if check_port "localhost" "22379" "etcd2"; then ((PORT_SUCCESS++)); fi
 ((PORT_CHECKS++))
-if check_port "localhost" "${PATRONI_DB1_PORT}" "db1"; then ((PORT_SUCCESS++)); fi
-((PORT_CHECKS++))
-if check_port "localhost" "${PATRONI_DB2_PORT}" "db2"; then ((PORT_SUCCESS++)); fi
-((PORT_CHECKS++))
-if check_port "localhost" "${PATRONI_DB3_PORT}" "db3"; then ((PORT_SUCCESS++)); fi
-((PORT_CHECKS++))
-if check_port "localhost" "${PATRONI_DB4_PORT}" "db4"; then ((PORT_SUCCESS++)); fi
-((PORT_CHECKS++))
+for db in "${DB_NODES[@]}"; do
+    local_num=$(get_node_num "$db")
+    local_db_port=$(get_db_port "$local_num")
+    local_api_port=$(get_api_port "$local_num")
+    if check_port "localhost" "${local_db_port}" "$db"; then ((PORT_SUCCESS++)); fi
+    ((PORT_CHECKS++))
+    if check_port "localhost" "${local_api_port}" "$db Patroni API"; then ((PORT_SUCCESS++)); fi
+    ((PORT_CHECKS++))
+done
 if check_port "localhost" "${HAPROXY_WRITE_PORT}" "HAProxy Write"; then ((PORT_SUCCESS++)); fi
 ((PORT_CHECKS++))
 if check_port "localhost" "${HAPROXY_READ_PORT}" "HAProxy Read"; then ((PORT_SUCCESS++)); fi
 ((PORT_CHECKS++))
 if check_port "localhost" "${HAPROXY_STATS_PORT}" "HAProxy Stats"; then ((PORT_SUCCESS++)); fi
-((PORT_CHECKS++))
-if check_port "localhost" "${PATRONI_DB1_API_PORT}" "db1 Patroni API"; then ((PORT_SUCCESS++)); fi
-((PORT_CHECKS++))
-if check_port "localhost" "${PATRONI_DB2_API_PORT}" "db2 Patroni API"; then ((PORT_SUCCESS++)); fi
-((PORT_CHECKS++))
-if check_port "localhost" "${PATRONI_DB3_API_PORT}" "db3 Patroni API"; then ((PORT_SUCCESS++)); fi
-((PORT_CHECKS++))
-if check_port "localhost" "${PATRONI_DB4_API_PORT}" "db4 Patroni API"; then ((PORT_SUCCESS++)); fi
 ((PORT_CHECKS++))
 if check_port "localhost" "${PGBOUNCER_PORT}" "PgBouncer (RW)"; then ((PORT_SUCCESS++)); fi
 ((PORT_CHECKS++))
@@ -739,42 +715,26 @@ echo "  # Connection URL (with password):"
 echo -e "  ${CYAN}postgresql://postgres:${POSTGRES_PASSWORD}@localhost:${HAPROXY_READ_PORT}/${DEFAULT_DATABASE}${NC}"
 echo ""
 echo -e "${YELLOW}Direct connections (bypass HAProxy):${NC}"
-echo "  # Direct connection to db1"
-echo -e "  ${CYAN}psql -h localhost -p ${PATRONI_DB1_PORT} -U postgres -d ${DEFAULT_DATABASE}${NC}"
-echo "  # Connection URL:"
-echo -e "  ${CYAN}postgresql://postgres:${POSTGRES_PASSWORD}@localhost:${PATRONI_DB1_PORT}/${DEFAULT_DATABASE}${NC}"
-echo ""
-echo "  # Direct connection to db2"
-echo -e "  ${CYAN}psql -h localhost -p ${PATRONI_DB2_PORT} -U postgres -d ${DEFAULT_DATABASE}${NC}"
-echo "  # Connection URL:"
-echo -e "  ${CYAN}postgresql://postgres:${POSTGRES_PASSWORD}@localhost:${PATRONI_DB2_PORT}/${DEFAULT_DATABASE}${NC}"
-echo ""
-echo "  # Direct connection to db3"
-echo -e "  ${CYAN}psql -h localhost -p ${PATRONI_DB3_PORT} -U postgres -d ${DEFAULT_DATABASE}${NC}"
-echo "  # Connection URL:"
-echo -e "  ${CYAN}postgresql://postgres:${POSTGRES_PASSWORD}@localhost:${PATRONI_DB3_PORT}/${DEFAULT_DATABASE}${NC}"
-echo ""
-echo "  # Direct connection to db4"
-echo -e "  ${CYAN}psql -h localhost -p ${PATRONI_DB4_PORT} -U postgres -d ${DEFAULT_DATABASE}${NC}"
-echo "  # Connection URL:"
-echo -e "  ${CYAN}postgresql://postgres:${POSTGRES_PASSWORD}@localhost:${PATRONI_DB4_PORT}/${DEFAULT_DATABASE}${NC}"
-echo ""
+for db in "${DB_NODES[@]}"; do
+    local_num=$(get_node_num "$db")
+    local_db_port=$(get_db_port "$local_num")
+    echo "  # Direct connection to $db"
+    echo -e "  ${CYAN}psql -h localhost -p ${local_db_port} -U postgres -d ${DEFAULT_DATABASE}${NC}"
+    echo "  # Connection URL:"
+    echo -e "  ${CYAN}postgresql://postgres:${POSTGRES_PASSWORD}@localhost:${local_db_port}/${DEFAULT_DATABASE}${NC}"
+    echo ""
+done
 
 echo -e "${GREEN}Patroni REST API:${NC}"
-echo "  # Check db1 status"
-echo -e "  ${CYAN}curl http://localhost:${PATRONI_DB1_API_PORT}/patroni${NC}"
-echo ""
-echo "  # Check db2 status"
-echo -e "  ${CYAN}curl http://localhost:${PATRONI_DB2_API_PORT}/patroni${NC}"
-echo ""
-echo "  # Check db3 status"
-echo -e "  ${CYAN}curl http://localhost:${PATRONI_DB3_API_PORT}/patroni${NC}"
-echo ""
-echo "  # Check db4 status"
-echo -e "  ${CYAN}curl http://localhost:${PATRONI_DB4_API_PORT}/patroni${NC}"
-echo ""
+for db in "${DB_NODES[@]}"; do
+    local_num=$(get_node_num "$db")
+    local_api_port=$(get_api_port "$local_num")
+    echo "  # Check $db status"
+    echo -e "  ${CYAN}curl http://localhost:${local_api_port}/patroni${NC}"
+    echo ""
+done
 echo "  # Check cluster status"
-echo -e "  ${CYAN}docker exec -it db1 patronictl -c /etc/patroni/patroni.yml list${NC}"
+echo -e "  ${CYAN}docker exec -it ${DB_NODES[0]} patronictl -c /etc/patroni/patroni.yml list${NC}"
 echo ""
 
 echo -e "${GREEN}HAProxy Stats:${NC}"

@@ -115,69 +115,7 @@ services:
       start_period: 30s
     restart: unless-stopped
 
-  db1:
-    <<: *patroni_base
-    container_name: db1
-    hostname: db1
-    ports:
-      - "${PATRONI_DB1_PORT}:5431"
-      - "${PATRONI_DB1_API_PORT}:8001"
-    environment:
-      - DEFAULT_DATABASE=${DEFAULT_DATABASE:-maborak}
-    volumes:
-      - db1_data:/var/lib/postgresql
-      - ./templates/patroni.yml.tpl:/etc/patroni/patroni.yml.tpl:ro
-      - ./scripts:/etc/patroni/scripts:ro
-      - ./ssh_keys/barman_rsa:/ssh_keys/barman_rsa:ro
-      - ./ssh_keys/barman_rsa.pub:/ssh_keys/barman_rsa.pub:ro
-
-  db2:
-    <<: *patroni_base
-    container_name: db2
-    hostname: db2
-    ports:
-      - "${PATRONI_DB2_PORT}:5431"
-      - "${PATRONI_DB2_API_PORT}:8001"
-    environment:
-      - DEFAULT_DATABASE=${DEFAULT_DATABASE:-maborak}
-    volumes:
-      - db2_data:/var/lib/postgresql
-      - ./templates/patroni.yml.tpl:/etc/patroni/patroni.yml.tpl:ro
-      - ./scripts:/etc/patroni/scripts:ro
-      - ./ssh_keys/barman_rsa:/ssh_keys/barman_rsa:ro
-      - ./ssh_keys/barman_rsa.pub:/ssh_keys/barman_rsa.pub:ro
-
-  db3:
-    <<: *patroni_base
-    container_name: db3
-    hostname: db3
-    ports:
-      - "${PATRONI_DB3_PORT}:5431"
-      - "${PATRONI_DB3_API_PORT}:8001"
-    environment:
-      - DEFAULT_DATABASE=${DEFAULT_DATABASE:-maborak}
-    volumes:
-      - db3_data:/var/lib/postgresql
-      - ./templates/patroni.yml.tpl:/etc/patroni/patroni.yml.tpl:ro
-      - ./scripts:/etc/patroni/scripts:ro
-      - ./ssh_keys/barman_rsa:/ssh_keys/barman_rsa:ro
-      - ./ssh_keys/barman_rsa.pub:/ssh_keys/barman_rsa.pub:ro
-
-  db4:
-    <<: *patroni_base
-    container_name: db4
-    hostname: db4
-    ports:
-      - "${PATRONI_DB4_PORT}:5431"
-      - "${PATRONI_DB4_API_PORT}:8001"
-    environment:
-      - DEFAULT_DATABASE=${DEFAULT_DATABASE:-maborak}
-    volumes:
-      - db4_data:/var/lib/postgresql
-      - ./templates/patroni.yml.tpl:/etc/patroni/patroni.yml.tpl:ro
-      - ./scripts:/etc/patroni/scripts:ro
-      - ./ssh_keys/barman_rsa:/ssh_keys/barman_rsa:ro
-      - ./ssh_keys/barman_rsa.pub:/ssh_keys/barman_rsa.pub:ro
+__DB_SERVICES__
 
   # Barman backup server
   barman:
@@ -201,14 +139,7 @@ services:
     networks:
       - patroni_network
     depends_on:
-      db1:
-        condition: service_healthy
-      db2:
-        condition: service_healthy
-      db3:
-        condition: service_healthy
-      db4:
-        condition: service_healthy
+__DB_DEPENDS_ON_HEALTHY__
     healthcheck:
       test: ["CMD-SHELL", "barman check db1 --nagios 2>/dev/null || exit 1"]
       interval: 30s
@@ -231,14 +162,7 @@ services:
     networks:
       - patroni_network
     depends_on:
-      db1:
-        condition: service_healthy
-      db2:
-        condition: service_healthy
-      db3:
-        condition: service_healthy
-      db4:
-        condition: service_healthy
+__DB_DEPENDS_ON_HEALTHY__
     healthcheck:
       test: ["CMD-SHELL", "haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg"]
       interval: 10s
@@ -303,9 +227,6 @@ volumes:
   etcd1_data:
   etcd2_data:
   etcd3_data:
-  db1_data:
-  db2_data:
-  db3_data:
-  db4_data:
+__DB_VOLUMES__
   barman_data:
   barman_backup:

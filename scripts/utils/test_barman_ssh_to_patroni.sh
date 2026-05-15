@@ -3,14 +3,8 @@
 
 set -e
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/common.sh"
 cd "$SCRIPT_DIR/../"
 
 echo -e "${BLUE}========================================${NC}"
@@ -45,11 +39,11 @@ fi
 echo ""
 
 # Test SSH connections from Barman to each Patroni node
-NODES=("db1" "db2" "db3" "db4")
+DB_NODES=($(get_db_nodes))
 SUCCESS_COUNT=0
 FAIL_COUNT=0
 
-for node in "${NODES[@]}"; do
+for node in "${DB_NODES[@]}"; do
     if ! docker ps --format '{{.Names}}' | grep -q "^${node}$"; then
         echo -e "${YELLOW}⚠ ${node}: Container not running, skipping${NC}"
         FAIL_COUNT=$((FAIL_COUNT + 1))

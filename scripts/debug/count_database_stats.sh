@@ -5,84 +5,21 @@
 
 set -e
 
-# Colors for output
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
-BOLD='\033[1m'
-
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/common.sh"
 cd "$SCRIPT_DIR/.."
 
-# Load environment variables
-if [ -f .env ]; then
-    set -a
-    source .env
-    set +a
-fi
-
-POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-
 # Determine which node to connect to (prefer leader)
-LEADER_NODE=""
-LEADER_PORT=""
-
-# Try to find the leader using patronictl (most reliable)
 echo -e "${YELLOW}Detecting cluster leader...${NC}" >&2
-PATRONI_LIST=$(docker exec db1 patronictl -c /etc/patroni/patroni.yml list 2>/dev/null || echo "")
-if [ -n "$PATRONI_LIST" ]; then
-    # Extract leader from patronictl output (format: | db3 | db3:5431 | Leader | running |)
-    LEADER_NODE=$(echo "$PATRONI_LIST" | grep -i "Leader" | awk '{print $2}' | head -1)
-    if [ -n "$LEADER_NODE" ]; then
-        LEADER_NODE_UPPER=$(echo "$LEADER_NODE" | tr '[:lower:]' '[:upper:]')
-        port_var="PATRONI_${LEADER_NODE_UPPER}_PORT"
-        LEADER_PORT=${!port_var}
-        if [ -z "$LEADER_PORT" ]; then
-            case $LEADER_NODE in
-                db1) LEADER_PORT=15431 ;;
-                db2) LEADER_PORT=15432 ;;
-                db3) LEADER_PORT=15433 ;;
-                db4) LEADER_PORT=15434 ;;
-            esac
-        fi
-        echo -e "${GREEN}✓ Found leader: ${LEADER_NODE}${NC}" >&2
-    fi
-fi
-
-# Fallback: Try REST API if patronictl didn't work
-if [ -z "$LEADER_NODE" ]; then
-    echo -e "${YELLOW}  Trying REST API detection...${NC}" >&2
-    for node in db1 db2 db3 db4; do
-        role=$(docker exec "$node" sh -c "curl -s http://localhost:8001/patroni 2>/dev/null | python3 -c 'import sys, json; print(json.load(sys.stdin).get(\"role\", \"unknown\"))'" 2>/dev/null || echo "unknown")
-        
-        if [ "$role" = "primary" ] || [ "$role" = "Leader" ]; then
-            LEADER_NODE="$node"
-            node_upper=$(echo "$node" | tr '[:lower:]' '[:upper:]')
-            port_var="PATRONI_${node_upper}_PORT"
-            LEADER_PORT=${!port_var}
-            if [ -z "$LEADER_PORT" ]; then
-                case $node in
-                    db1) LEADER_PORT=15431 ;;
-                    db2) LEADER_PORT=15432 ;;
-                    db3) LEADER_PORT=15433 ;;
-                    db4) LEADER_PORT=15434 ;;
-                esac
-            fi
-            echo -e "${GREEN}✓ Found leader via REST API: ${LEADER_NODE}${NC}" >&2
-            break
-        fi
-    done
-fi
-
-# Final fallback: use db1 if no leader found
+LEADER_NODE=$(detect_leader)
 if [ -z "$LEADER_NODE" ]; then
     echo -e "${YELLOW}⚠ Warning: Could not detect leader, defaulting to db1${NC}" >&2
     LEADER_NODE="db1"
-    LEADER_PORT=${PATRONI_DB1_PORT:-15431}
+else
+    echo -e "${GREEN}✓ Found leader: ${LEADER_NODE}${NC}" >&2
 fi
+LEADER_PORT=$(get_db_port "$(get_node_num "$LEADER_NODE")")
 echo "" >&2
 
 # Function to run SQL query on a specific database

@@ -1,6 +1,9 @@
-.PHONY: help up down restart logs ps build clean status shell-db1 shell-db2 shell-db3 shell-db4 shell-etcd1 shell-haproxy shell-barman shell show-backups check backup list-backups check-archive pitr monitor-recovery vacuum analyze pgbadger psql psql-read psql-node stats activity slow-queries switchover reinit failover test-ssh test-connectivity info config leader
+.PHONY: help generate up down restart logs ps build clean status shell-db1 shell-db2 shell-db3 shell-db4 shell-etcd1 shell-haproxy shell-barman shell show-backups check backup list-backups check-archive pitr monitor-recovery vacuum analyze pgbadger psql psql-read psql-node stats activity slow-queries switchover reinit failover test-ssh test-connectivity info config leader disk
 
 .DEFAULT_GOAL := help
+
+generate: ## Generate all configs from templates (uses PATRONI_NODES from .env)
+	@bash scripts/generate_configs.sh
 
 help: ## Show this help message
 	@echo "Available commands:"
@@ -19,8 +22,8 @@ help: ## Show this help message
 # Container Management
 # ============================================================================
 
-up: ## Start all containers
-	docker-compose up -d
+up: generate ## Generate configs and start all containers
+	docker-compose up -d --remove-orphans
 
 down: ## Stop all containers
 	docker-compose down
@@ -67,6 +70,15 @@ info: ## Show detailed stack information (JSON or human-readable)
 
 leader: ## Show current leader node
 	@docker exec db1 patronictl -c /etc/patroni/patroni.yml list | grep Leader | awk '{print "Leader: " $$2}'
+
+disk: ## Show container/volume/image disk usage (FORMAT=json for JSON, CLEANUP=1 to purge PG logs)
+	@if [ "$(CLEANUP)" = "1" ]; then \
+		bash scripts/debug/disk_usage.sh --cleanup; \
+	elif [ "$(FORMAT)" = "json" ]; then \
+		bash scripts/debug/disk_usage.sh --json; \
+	else \
+		bash scripts/debug/disk_usage.sh; \
+	fi
 
 # ============================================================================
 # Backup Operations
@@ -125,7 +137,7 @@ list-backups: ## List backups (auto-detects leader, or use SERVER=db1 to overrid
 		if [ -z "$$SERVER" ]; then \
 			echo "Error: Could not detect leader. Listing backups for all servers:"; \
 			echo ""; \
-			for s in db1 db2 db3 db4; do \
+			. ./.env 2>/dev/null; for i in $$(seq 1 $${PATRONI_NODES:-4}); do s="db$$i"; \
 				echo "=== $$s ==="; \
 				docker exec barman barman list-backup $$s 2>/dev/null || echo "No backups or server not configured"; \
 				echo ""; \
@@ -345,10 +357,10 @@ config: ## Show current configuration (ports, environment variables)
 	@echo "HAProxy Write: $${HAPROXY_WRITE_PORT:-5551}"
 	@echo "HAProxy Read: $${HAPROXY_READ_PORT:-5552}"
 	@echo "HAProxy Stats: http://localhost:$${HAPROXY_STATS_PORT:-5553}/stats"
-	@echo "PostgreSQL (db1): $${PATRONI_DB1_PORT:-15431}"
-	@echo "PostgreSQL (db2): $${PATRONI_DB2_PORT:-15432}"
-	@echo "PostgreSQL (db3): $${PATRONI_DB3_PORT:-15433}"
-	@echo "PostgreSQL (db4): $${PATRONI_DB4_PORT:-15434}"
+	@. ./.env 2>/dev/null; for i in $$(seq 1 $${PATRONI_NODES:-4}); do \
+		port=$$((PATRONI_BASE_PORT + i - 1)); \
+		echo "PostgreSQL (db$$i): $$port"; \
+	done
 
 # Allow passing extra arguments to targets
 %:

@@ -9,23 +9,14 @@
 
 set -e
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m'
-BOLD='\033[1m'
-
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR/.."
 
-# Cluster configuration
-# Cluster name can be set via PATRONI_CLUSTER_NAME environment variable
-# Defaults to "patroni1" if not set
-PATRONI_CLUSTER_NAME="${PATRONI_CLUSTER_NAME:-patroni1}"
+# Load shared library (provides colors, .env, node discovery, leader detection)
+source "$SCRIPT_DIR/../lib/common.sh"
+
+# Build DB_NODES array from common.sh
+DB_NODES=($(get_db_nodes))
 
 # Simple numbered menu - reliable, no hanging, works everywhere
 # Usage: arrow_menu "Title" "Option1" "Option2" ... "OptionN"
@@ -143,7 +134,7 @@ if [ -z "$BACKUP_ID" ] && [ -z "$TARGET_TIME" ] && [ $# -eq 0 ]; then
         BACKUP_IDS=()
         BACKUP_COUNT=0
         
-        for server in db1 db2 db3 db4; do
+        for server in "${DB_NODES[@]}"; do
             # Get all backup lines (barman list-backup doesn't have a header, so don't skip lines)
             BACKUPS=$(docker exec barman barman list-backup "$server" 2>/dev/null)
             if [ -n "$BACKUPS" ]; then
@@ -234,7 +225,7 @@ if [ -z "$BACKUP_ID" ] && [ -z "$TARGET_TIME" ] && [ $# -eq 0 ]; then
     # Step 3: Select target node
     echo -e "${CYAN}Step 3: Select target Patroni node${NC}"
     echo ""
-    NODE_MENU_OPTIONS=("db1" "db2" "db3" "db4")
+    NODE_MENU_OPTIONS=("${DB_NODES[@]}")
     arrow_menu "Select target Patroni node:" "${NODE_MENU_OPTIONS[@]}"
     SELECTED_NODE_INDEX=$ARROW_MENU_RESULT
     
@@ -361,7 +352,7 @@ else
         echo "                        - barman-get-wal: Use SSH with barman get-wal command"
         echo ""
         echo "Available backups:"
-        for server in db1 db2 db3 db4; do
+        for server in "${DB_NODES[@]}"; do
             BACKUPS=$(docker exec barman barman list-backup "$server" 2>/dev/null | head -10)
             if [ -n "$BACKUPS" ]; then
                 echo -e "${CYAN}${server}:${NC}"
@@ -377,23 +368,8 @@ if [ -z "$TARGET_NODE" ]; then
     TARGET_NODE="db1"
 fi
 
-# Load environment variables
-if [ -f .env ]; then
-    set -a
-    source .env
-    set +a
-fi
-
-DEFAULT_DATABASE=${DEFAULT_DATABASE:-maborak}
-
-# Determine Patroni data directory based on node
-case $TARGET_NODE in
-    db1) PATRONI_DATA_DIR="/var/lib/postgresql/15/patroni1" ;;
-    db2) PATRONI_DATA_DIR="/var/lib/postgresql/15/patroni2" ;;
-    db3) PATRONI_DATA_DIR="/var/lib/postgresql/15/patroni3" ;;
-    db4) PATRONI_DATA_DIR="/var/lib/postgresql/15/patroni4" ;;
-    *) PATRONI_DATA_DIR="/var/lib/postgresql/15/patroni1" ;;
-esac
+# Determine Patroni data directory using common.sh
+PATRONI_DATA_DIR=$(get_patroni_data_dir)
 
 # Helper functions
 stop_patroni() {
@@ -439,7 +415,7 @@ check_node_in_cluster() {
     local node=$1
     # Try to get cluster status from any available node
     local cluster_output=""
-    for check_node in db1 db2 db3 db4; do
+    for check_node in $(get_db_nodes); do
         if docker exec "$check_node" pg_isready -U postgres -p 5431 -h localhost >/dev/null 2>&1; then
             cluster_output=$(docker exec "$check_node" patronictl -c /etc/patroni/patroni.yml list 2>/dev/null || echo "")
             if [ -n "$cluster_output" ] && echo "$cluster_output" | grep -q "Member"; then
@@ -478,7 +454,7 @@ echo -e "${YELLOW}[1/8] Verifying backup exists...${NC}"
 # If --server was provided, use it; otherwise auto-detect
 if [ -z "$BACKUP_SERVER" ]; then
     echo -e "${CYAN}Auto-detecting backup server...${NC}"
-    for server in db1 db2 db3 db4; do
+    for server in "${DB_NODES[@]}"; do
         if docker exec barman barman show-backup "$server" "$BACKUP_ID" > /dev/null 2>&1; then
             BACKUP_SERVER="$server"
             break
@@ -497,7 +473,7 @@ if [ -z "$BACKUP_SERVER" ] || ! docker exec barman barman show-backup "$BACKUP_S
         echo -e "  on any server!${NC}"
     fi
     echo "Available backups:"
-    for server in db1 db2 db3 db4; do
+    for server in "${DB_NODES[@]}"; do
         BACKUPS=$(docker exec barman barman list-backup "$server" 2>/dev/null | head -5)
         if [ -n "$BACKUPS" ]; then
             echo -e "${CYAN}${server}:${NC}"
@@ -899,7 +875,7 @@ if [ "$AUTO_APPLY" = "true" ]; then
     if [ "$IN_CLUSTER" = "true" ]; then
         echo -e "${YELLOW}  ⚠ Warning: ${TARGET_NODE} still appears in cluster after ${MAX_CHECKS} checks${NC}"
         echo -e "${CYAN}  Current cluster status:${NC}"
-        for check_node in db1 db2 db3 db4; do
+        for check_node in "${DB_NODES[@]}"; do
             if docker exec "$check_node" pg_isready -U postgres -p 5431 -h localhost >/dev/null 2>&1; then
                 docker exec "$check_node" patronictl -c /etc/patroni/patroni.yml list 2>/dev/null | head -10
                 break
@@ -1379,7 +1355,7 @@ if [ "$AUTO_APPLY" = "true" ]; then
     
     # Define OTHER_NODES array (will be used after successful restore)
     OTHER_NODES=()
-    for node in db1 db2 db3 db4; do
+    for node in "${DB_NODES[@]}"; do
         if [ "$node" != "$TARGET_NODE" ]; then
             OTHER_NODES+=("$node")
         fi
@@ -1929,7 +1905,7 @@ if [ "$AUTO_APPLY" = "true" ]; then
             
             # Stop all nodes
             echo -e "${CYAN}  Stopping all cluster nodes...${NC}"
-            for node in db1 db2 db3 db4; do
+            for node in "${DB_NODES[@]}"; do
                 if [ "$node" != "$TARGET_NODE" ]; then
                     echo -e "${CYAN}    Stopping ${node}...${NC}"
                     stop_patroni "$node"
@@ -2029,7 +2005,7 @@ if [ "$AUTO_APPLY" = "true" ]; then
         
         # Stop all nodes
         echo -e "${CYAN}  Stopping all cluster nodes...${NC}"
-        for node in db1 db2 db3 db4; do
+        for node in "${DB_NODES[@]}"; do
             if [ "$node" != "$TARGET_NODE" ]; then
                 echo -e "${CYAN}    Stopping ${node}...${NC}"
                 stop_patroni "$node"

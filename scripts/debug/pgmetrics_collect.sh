@@ -12,17 +12,9 @@
 
 set -e
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
-BOLD='\033[1m'
-
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/common.sh"
 cd "$SCRIPT_DIR/.."
 
 # Default values
@@ -85,29 +77,15 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Function to find leader node
-find_leader() {
-    local leader=""
-    PATRONI_LIST=$(docker exec db1 patronictl -c /etc/patroni/patroni.yml list 2>/dev/null || echo "")
-    if [ -n "$PATRONI_LIST" ]; then
-        leader=$(echo "$PATRONI_LIST" | grep -i "Leader" | awk '{print $2}' | head -1)
-    fi
-    echo "$leader"
-}
-
 # Determine target nodes
 NODES=()
 if [ -n "$TARGET_NODE" ]; then
-    if [[ ! "$TARGET_NODE" =~ ^db[1-4]$ ]]; then
-        echo -e "${RED}Invalid node: $TARGET_NODE${NC}"
-        echo -e "${YELLOW}Valid nodes: db1, db2, db3, db4${NC}"
-        exit 1
-    fi
+    validate_node "$TARGET_NODE" || exit 1
     NODES=("$TARGET_NODE")
 elif [ "$ALL_NODES" = true ]; then
-    NODES=("db1" "db2" "db3" "db4")
+    NODES=($(get_db_nodes))
 else
-    LEADER=$(find_leader)
+    LEADER=$(detect_leader)
     if [ -z "$LEADER" ]; then
         echo -e "${YELLOW}Could not determine leader, using db1${NC}"
         LEADER="db1"
@@ -170,7 +148,7 @@ for node in "${NODES[@]}"; do
     # Get connection info from node
     # pgmetrics needs to connect from barman container to the node
     # We'll use the node's hostname and port
-    CONN_STRING="postgresql://postgres:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@${node}:5431/postgres"
+    CONN_STRING="postgresql://postgres:${POSTGRES_PASSWORD}@${node}:5431/postgres"
     
     echo -e "${CYAN}  Collecting metrics...${NC}"
     start_time=$(date +%s)

@@ -3,14 +3,8 @@
 
 set -e
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/common.sh"
 cd "$SCRIPT_DIR/../"
 
 echo -e "${BLUE}========================================${NC}"
@@ -19,7 +13,7 @@ echo -e "${BLUE}========================================${NC}"
 echo ""
 
 # Get the leader node
-LEADER=$(docker exec db1 patronictl -c /etc/patroni/patroni.yml list 2>&1 | grep Leader | awk '{print $2}')
+LEADER=$(detect_leader)
 
 if [ -z "$LEADER" ]; then
     echo -e "${RED}ERROR: Could not determine leader node${NC}"

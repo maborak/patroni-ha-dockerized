@@ -12,17 +12,9 @@
 
 set -e
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
-BOLD='\033[1m'
-
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/common.sh"
 cd "$SCRIPT_DIR/.."
 
 # Default values
@@ -91,19 +83,9 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Function to find leader node
-find_leader() {
-    local leader=""
-    PATRONI_LIST=$(docker exec db1 patronictl -c /etc/patroni/patroni.yml list 2>/dev/null || echo "")
-    if [ -n "$PATRONI_LIST" ]; then
-        leader=$(echo "$PATRONI_LIST" | grep -i "Leader" | awk '{print $2}' | head -1)
-    fi
-    echo "$leader"
-}
-
 # Determine target node
 if [ -z "$TARGET_NODE" ]; then
-    LEADER=$(find_leader)
+    LEADER=$(detect_leader)
     if [ -z "$LEADER" ]; then
         echo -e "${YELLOW}Could not determine leader, using db1${NC}"
         LEADER="db1"
@@ -111,11 +93,7 @@ if [ -z "$TARGET_NODE" ]; then
     TARGET_NODE="$LEADER"
 fi
 
-if [[ ! "$TARGET_NODE" =~ ^db[1-4]$ ]]; then
-    echo -e "${RED}Invalid node: $TARGET_NODE${NC}"
-    echo -e "${YELLOW}Valid nodes: db1, db2, db3, db4${NC}"
-    exit 1
-fi
+validate_node "$TARGET_NODE" || exit 1
 
 # Check if pg_stat_statements extension is enabled
 echo -e "${CYAN}Checking pg_stat_statements extension...${NC}"

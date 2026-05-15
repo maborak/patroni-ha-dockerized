@@ -1,0 +1,15 @@
+{
+  "timestamp": "2026-02-17T18:03:54Z",
+  "node": "db2",
+  "cluster_statistics": {
+    "total_databases": 1,
+    "total_tables": 31,
+    "total_columns": 289,
+    "total_rows": 2375259,
+    "total_size": "33GB",
+    "total_size_bytes": 35084546863
+  },
+  "databases": [
+    {"name": "maborak", "tables": 31, "columns": 289, "rows": 2375259, "size": "33GB", "size_bytes": 35084546863}
+  ]
+}

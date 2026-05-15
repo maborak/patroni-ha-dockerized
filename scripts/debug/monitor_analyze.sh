@@ -5,27 +5,10 @@
 
 set -e
 
-# Colors for output
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m' # No Color
-BOLD='\033[1m'
-
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/common.sh"
 cd "$SCRIPT_DIR/.."
-
-# Load environment variables
-if [ -f .env ]; then
-    set -a
-    source .env
-    set +a
-fi
-
-DEFAULT_DATABASE=${DEFAULT_DATABASE:-maborak}
 REFRESH_INTERVAL=${2:-2}
 
 # If node is specified, use it; otherwise detect leader
@@ -35,32 +18,11 @@ if [ -n "$1" ]; then
 else
     # Auto-detect leader
     echo -e "${YELLOW}Auto-detecting cluster leader...${NC}" >&2
-    DEFAULT_NODE=""
-    
-    # Try to find the leader using patronictl
-    PATRONI_LIST=$(docker exec db1 patronictl -c /etc/patroni/patroni.yml list 2>/dev/null || echo "")
-    if [ -n "$PATRONI_LIST" ]; then
-        # Extract leader from patronictl output (format: | db3 | db3:5431 | Leader | running |)
-        DEFAULT_NODE=$(echo "$PATRONI_LIST" | grep -i "Leader" | awk '{print $2}' | head -1)
-        if [ -n "$DEFAULT_NODE" ]; then
-            echo -e "${GREEN}✓ Found leader: ${DEFAULT_NODE}${NC}" >&2
-        fi
-    fi
-    
-    # Fallback: Try REST API
-    if [ -z "$DEFAULT_NODE" ]; then
-        for node in db1 db2 db3 db4; do
-            role=$(docker exec "$node" sh -c "curl -s http://localhost:8001/patroni 2>/dev/null | python3 -c 'import sys, json; print(json.load(sys.stdin).get(\"role\", \"unknown\"))'" 2>/dev/null || echo "unknown")
-            if [ "$role" = "primary" ] || [ "$role" = "Leader" ]; then
-                DEFAULT_NODE="$node"
-                echo -e "${GREEN}✓ Found leader via REST API: ${DEFAULT_NODE}${NC}" >&2
-                break
-            fi
-        done
-    fi
-    
-    # Final fallback
-    if [ -z "$DEFAULT_NODE" ]; then
+    DEFAULT_NODE=$(detect_leader)
+
+    if [ -n "$DEFAULT_NODE" ]; then
+        echo -e "${GREEN}✓ Found leader: ${DEFAULT_NODE}${NC}" >&2
+    else
         echo -e "${YELLOW}⚠ Warning: Could not detect leader, defaulting to db1${NC}" >&2
         echo -e "${CYAN}  Tip: Specify node manually: bash scripts/debug/monitor_analyze.sh db3${NC}" >&2
         DEFAULT_NODE="db1"
