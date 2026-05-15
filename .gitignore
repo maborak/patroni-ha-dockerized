@@ -16,3 +16,7 @@
 .claude/brainstorm/sessions/
 .superpowers/
 .claude/
+
+# Backup artifacts (output of scripts/backup/dump_database.sh)
+backups/
+mybk/

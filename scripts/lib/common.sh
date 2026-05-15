@@ -165,3 +165,23 @@ detect_leader_api() {
     echo "db1"  # fallback
     return 1
 }
+
+# Detect a healthy replica using Patroni REST API.
+# The /replica endpoint returns HTTP 200 only when the node is a running replica
+# with lag <= max_replica_lag_on_failover, so we trust it as our health signal.
+# Usage: REPLICA=$(detect_healthy_replica) || echo "none available"
+detect_healthy_replica() {
+    for i in $(seq 1 "$PATRONI_NODES"); do
+        local node="db${i}"
+        local api_port
+        api_port=$(get_api_port "$i")
+        local http_code
+        http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+            "http://localhost:${api_port}/replica" 2>/dev/null)
+        if [ "$http_code" = "200" ]; then
+            echo "$node"
+            return 0
+        fi
+    done
+    return 1
+}

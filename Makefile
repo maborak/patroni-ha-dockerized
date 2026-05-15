@@ -1,4 +1,4 @@
-.PHONY: help generate up down restart logs ps build clean status shell-db1 shell-db2 shell-db3 shell-db4 shell-etcd1 shell-haproxy shell-barman shell show-backups check backup list-backups check-archive pitr monitor-recovery vacuum analyze pgbadger psql psql-read psql-node stats activity slow-queries switchover reinit failover test-ssh test-connectivity info config leader disk
+.PHONY: help generate up down restart logs ps build clean status shell-db1 shell-db2 shell-db3 shell-db4 shell-etcd1 shell-haproxy shell-barman shell show-backups check backup dump-db restore-db list-backups check-archive pitr monitor-recovery vacuum analyze pgbadger psql psql-read psql-node list-dbs stats activity slow-queries switchover reinit failover test-ssh test-connectivity info config leader disk
 
 .DEFAULT_GOAL := help
 
@@ -165,6 +165,24 @@ show-backups: ## Show backup details (usage: make show-backups SERVER=db1 BACKUP
 check-archive: ## Check WAL archiving status on leader
 	@bash scripts/backup/check_archive_command.sh
 
+dump-db: ## Logical .tgz backup of a single DB from a healthy replica (DB=name [NODE=db3] [JOBS=8] [OUTPUT=./backups])
+	@bash scripts/backup/dump_database.sh \
+		$(if $(DB),--db $(DB),--interactive) \
+		$(if $(NODE),--node $(NODE),) \
+		$(if $(JOBS),--jobs $(JOBS),) \
+		$(if $(OUTPUT),--output $(OUTPUT),)
+
+restore-db: ## Restore a DB from .tgz into the leader (ARCHIVE=path [TARGET=name] [JOBS=8] [CLEAN=1] [NO_OWNER=1] [NO_ACL=1])
+	@bash scripts/backup/restore_database.sh \
+		$(if $(ARCHIVE),--archive $(ARCHIVE),--interactive) \
+		$(if $(TARGET),--target $(TARGET),) \
+		$(if $(NODE),--node $(NODE),) \
+		$(if $(JOBS),--jobs $(JOBS),) \
+		$(if $(filter 1,$(CLEAN)),--clean,) \
+		$(if $(filter 1,$(NO_OWNER)),--no-owner,) \
+		$(if $(filter 1,$(NO_ACL)),--no-acl,) \
+		$(if $(filter 1,$(YES)),--yes,)
+
 # ============================================================================
 # Recovery Operations
 # ============================================================================
@@ -227,6 +245,12 @@ psql-node: ## Connect directly to specific node (usage: make psql-node NODE=db1)
 		exit 1; \
 	fi
 	@docker exec -it $(NODE) psql -U postgres -d $${DATABASE:-maborak}
+
+list-dbs: ## List databases on the leader (NODE=db2 to override, FORMAT=json for JSON, TEMPLATES=1 to include template DBs)
+	@bash scripts/debug/list_databases.sh \
+		$(if $(NODE),--node $(NODE),) \
+		$(if $(filter json,$(FORMAT)),--json,) \
+		$(if $(filter 1,$(TEMPLATES)),--include-templates,)
 
 stats: ## Show database statistics (usage: make stats NODE=db1)
 	@if [ -z "$(NODE)" ]; then \
