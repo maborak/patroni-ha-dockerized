@@ -323,7 +323,8 @@ wizard_pick_source() {
     if [[ "$ARCHIVE" =~ ^postgres(ql)?:// ]]; then
         SOURCE_URI="$ARCHIVE"; ARCHIVE=""; return 0
     fi
-    [ "$INTERACTIVE" = true ] || [ -n "$ARCHIVE" ] && return 0
+    [ "$INTERACTIVE" = true ] || return 0
+    [ -n "$ARCHIVE" ] && return 0
 
     echo "" >&2
     echo -e "${BLUE}${BOLD}Restore wizard — choose a source${NC}" >&2
