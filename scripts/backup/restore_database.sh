@@ -934,10 +934,16 @@ if [ "$EXISTS" = "1" ]; then
 fi
 
 # --- Show plan ----------------------------------------------------------------
-ARCHIVE_SIZE=$(du -h "$ARCHIVE" | awk '{print $1}')
+if [ -n "$SOURCE_URI" ]; then
+    ARCHIVE_DISPLAY="live URI ($(mask_dsn "$SOURCE_URI"))"
+    ARCHIVE_SIZE=""
+else
+    ARCHIVE_SIZE=$(du -h "$ARCHIVE" | awk '{print $1}')
+    ARCHIVE_DISPLAY="$ARCHIVE  (${ARCHIVE_SIZE})"
+fi
 echo ""
 echo -e "${BLUE}${BOLD}=== Restore Plan ===${NC}"
-echo -e "  ${CYAN}Archive:${NC}      $ARCHIVE  (${ARCHIVE_SIZE})"
+echo -e "  ${CYAN}Archive:${NC}      $ARCHIVE_DISPLAY"
 echo -e "  ${CYAN}Target DB:${NC}    $TARGET"
 if [ "$REMOTE_MODE" = true ]; then
     echo -e "  ${CYAN}Target type:${NC}  ${YELLOW}${BOLD}REMOTE${NC}"
