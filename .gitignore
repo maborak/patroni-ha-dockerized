@@ -1,0 +1,53 @@
+# SSH keys (auto-generated, never commit)
+ssh_keys/*
+!ssh_keys/.gitkeep
+*.pem
+*.key
+*.rsa
+*.rsa.pub
+
+# Credentials and secrets
+configs/userlist.txt
+
+# Generated artifacts (rebuild with `make generate`; they encode your live topology)
+configs/haproxy.cfg
+configs/barman.conf
+configs/pgbouncer.ini
+configs/pgbouncer-ro.ini
+barman/supervisord.conf
+docker-compose.yml
+
+# Python cache & bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Test artifacts & snapshots
+scripts/db_stats_before_pitr_*.json
+
+# Docker volumes & logs
+*.log
+
+# Environment files with secrets
+.env
+.env.local
+.env.*.local
+.env.backup.*
+
+# Claude framework
+.claude/brainstorm/sessions/
+.superpowers/
+.claude/
+
+# Backup artifacts (output of scripts/backup/dump_database.sh)
+backups/
+mybk/
+
+# Resume state for interrupted restores (may contain DSN passwords)
+/.restore-state/
+
+# Stray code from other projects that ended up in the working tree
+# (must not be bundled into Patroni HA commits via `git add .`)
+/products/
+/.opencode/
+

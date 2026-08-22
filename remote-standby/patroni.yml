@@ -1,0 +1,142 @@
+# ============================================================================
+# Patroni Standby Cluster — Remote DR node
+# ============================================================================
+#
+# This file goes on the REMOTE host (<remote-host>), replacing whatever
+# patroni.yml is currently active there.
+#
+# It turns the remote's existing Patroni into a STANDBY CLUSTER that follows
+# the main cluster running in Docker on the Mac. The remote will pg_basebackup
+# from the Mac on first start (over the VPN, ~40 GB), then stream WAL.
+#
+# Architecture:
+#   Remote (<remote-host>) ─── single TCP stream ───► Mac VPN <mac-vpn-ip>:5551
+#                             (HAProxy → current main leader)
+#
+# Replace all <placeholders>; values mirror .env §8 (REMOTE_*/MAC_VPN_HOST).
+# If your remote's paths/ports differ from the defaults below, adjust the
+# lines marked CHECK.
+# ============================================================================
+
+# Standby cluster scope MUST be different from the main cluster's scope
+# (main is "patroni1"). DCS keys live under /patroni1_dr/* so there's no
+# collision even if the standby's DCS is somehow visible to the main.
+scope: patroni1_dr
+name: dbr1                         # CHECK: any unique name for this standby node
+namespace: /patroni1_dr
+
+restapi:
+  listen: 0.0.0.0:8008             # Patroni REST API — internal to the remote
+  connect_address: <remote-host>:8008
+
+# ----------------------------------------------------------------------------
+# DCS — Distributed Configuration Store
+# ----------------------------------------------------------------------------
+# The standby uses the EXISTING etcd cluster on the remote network
+# (<etcd1>, <etcd2>). This is fully separate from the main
+# Mac-side etcd — no cross-WAN DCS dependency.
+etcd3:
+  hosts: <etcd1>:2379,<etcd2>:2379
+
+# ----------------------------------------------------------------------------
+# Bootstrap — what to do on FIRST start of the cluster
+# ----------------------------------------------------------------------------
+bootstrap:
+  dcs:
+    ttl: 30
+    loop_wait: 10
+    retry_timeout: 10
+    maximum_lag_on_failover: 1048576
+
+    # ┌─────────────────────────────────────────────────────────────────┐
+    # │  THE KEY SECTION — makes this cluster a standby of the main     │
+    # └─────────────────────────────────────────────────────────────────┘
+    standby_cluster:
+      host: <mac-vpn-ip>        # $MAC_VPN_HOST from .env §8
+      port: 5551                   # HAProxy write port → current main leader
+      primary_slot_name: standby_remote   # physical replication slot on main
+      # create_replica_methods determines HOW the standby's leader pulls data.
+      # basebackup works over the VPN; barman-style methods would not (barman
+      # is unreachable from the remote — it's behind Docker).
+      create_replica_methods:
+        - basebackup
+
+    postgresql:
+      use_pg_rewind: true
+      use_slots: true
+      parameters:
+        wal_level: replica
+        hot_standby: 'on'
+        max_wal_senders: 10
+        max_replication_slots: 10
+        wal_keep_size: 2GB
+        max_connections: 100
+        shared_buffers: 256MB              # CHECK: tune for remote host RAM
+        effective_cache_size: 1GB          # CHECK: tune for remote host RAM
+        # CRITICAL: archive_mode OFF on the standby — the barman archive_command
+        # in the main template would try to rsync to "barman" hostname which
+        # doesn't resolve from the remote. The standby doesn't need to archive.
+        archive_mode: 'off'
+        shared_preload_libraries: 'pg_stat_statements'
+        password_encryption: scram-sha-256
+        log_destination: 'stderr'
+        logging_collector: 'on'
+        log_directory: 'log'
+        log_filename: 'postgresql-%a.log'
+        log_truncate_on_rotation: 'on'
+        log_rotation_age: 1d
+
+      pg_hba:
+        - local all postgres peer
+        - host all all 127.0.0.1/32 trust
+        - host all postgres <your-subnet>/24 scram-sha-256
+        - host replication replicator 127.0.0.1/32 scram-sha-256
+        - host replication replicator <your-subnet>/24 scram-sha-256
+
+  # No initdb section needed — the standby's PG instance is bootstrapped
+  # via pg_basebackup from the main cluster (see standby_cluster above).
+
+# ----------------------------------------------------------------------------
+# PostgreSQL — local PG instance on this remote node
+# ----------------------------------------------------------------------------
+postgresql:
+  listen: 0.0.0.0:5432             # Arch's PG 18 doesn't listen, so 5432 is free
+  connect_address: <remote-host>:5432
+  data_dir: /var/lib/postgres/standby15    # Arch convention (postgres user home base)
+  bin_dir: /opt/pgsql-15/bin               # source-built PG 15.17 from /opt/build
+
+  authentication:
+    # Credentials MUST match the main cluster (replicator on main authenticates
+    # the standby's WAL streaming requests).
+    replication:
+      username: replicator
+      password: CHANGE_ME_BEFORE_FIRST_USE   # from main's .env REPLICATOR_PASSWORD
+    superuser:
+      username: postgres
+      password: CHANGE_ME_BEFORE_FIRST_USE   # from main's .env POSTGRES_PASSWORD
+    rewind:                                # for use_pg_rewind: true
+      username: postgres
+      password: CHANGE_ME_BEFORE_FIRST_USE
+
+  # First start triggers pg_basebackup from the main leader. The basebackup
+  # method connects to standby_cluster.host:standby_cluster.port
+  # (<mac-vpn-ip>:5551) using the replicator credentials above.
+  create_replica_methods:
+    - basebackup
+  basebackup:
+    # Rate-limit the initial 40 GB clone so it doesn't saturate the VPN.
+    # Adjust to your VPN capacity — 50M = 50 MB/s.
+    max-rate: '50M'
+    checkpoint: 'fast'
+
+  parameters:
+    unix_socket_directories: /var/run/postgresql   # CHECK: Debian default
+
+# ----------------------------------------------------------------------------
+# Tags — node-level metadata
+# ----------------------------------------------------------------------------
+tags:
+  nofailover: false        # this node CAN become standby-cluster's leader
+  noloadbalance: true      # but is not in any load-balancer pool
+  clonefrom: false         # other replicas should clone from main, not from here
+  nosync: true             # never participate in synchronous replication

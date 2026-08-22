@@ -1,0 +1,763 @@
+#!/bin/bash
+
+# Script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+# Load shared library (provides colors, .env, node discovery, leader detection)
+source "scripts/lib/common.sh"
+
+# Build DB_NODES array from common.sh
+DB_NODES=($(get_db_nodes))
+
+# Set defaults for ports not provided by common.sh
+HAPROXY_WRITE_PORT=${HAPROXY_WRITE_PORT:-5551}
+HAPROXY_READ_PORT=${HAPROXY_READ_PORT:-5552}
+HAPROXY_STATS_PORT=${HAPROXY_STATS_PORT:-5553}
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+REPLICATOR_PASSWORD=${REPLICATOR_PASSWORD:?Set REPLICATOR_PASSWORD in .env}
+PGBOUNCER_PORT=${PGBOUNCER_PORT:-6432}
+PGBOUNCER_RO_PORT=${PGBOUNCER_RO_PORT:-6433}
+
+echo -e "${BLUE}========================================${NC}"
+echo -e "${BLUE}  Docker Compose Stack Health Check${NC}"
+echo -e "${BLUE}========================================${NC}"
+echo ""
+
+# Check if docker-compose is available
+if ! command -v docker-compose &> /dev/null && ! command -v docker &> /dev/null; then
+    echo -e "${RED}ERROR: docker-compose or docker not found${NC}"
+    exit 1
+fi
+
+# Use docker compose (v2) if available, otherwise docker-compose (v1)
+if docker compose version &> /dev/null 2>&1; then
+    DOCKER_COMPOSE="docker compose"
+elif docker-compose version &> /dev/null 2>&1; then
+    DOCKER_COMPOSE="docker-compose"
+else
+    echo -e "${RED}ERROR: docker-compose not available${NC}"
+    exit 1
+fi
+
+# Check if stack is running
+echo -e "${YELLOW}Checking if stack is running...${NC}"
+RUNNING_CONTAINERS=$($DOCKER_COMPOSE ps -q 2>/dev/null | wc -l)
+if [ "$RUNNING_CONTAINERS" -eq 0 ]; then
+    echo -e "${RED}ERROR: Stack is not running. Start it with: ${CYAN}docker-compose up -d${NC}"
+    echo ""
+    echo -e "${YELLOW}To start the stack:${NC}"
+    echo -e "  ${CYAN}cd $SCRIPT_DIR${NC}"
+    echo -e "  ${CYAN}docker-compose up -d${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓ Stack is running (${RUNNING_CONTAINERS} containers)${NC}"
+echo ""
+
+# Function to check container status
+check_container() {
+    local container=$1
+    if docker ps --format '{{.Names}}' | grep -q "^${container}$"; then
+        local status=$(docker inspect --format='{{.State.Status}}' "$container" 2>/dev/null)
+        if [ "$status" = "running" ]; then
+            echo -e "${GREEN}✓ ${container}: Running${NC}"
+            return 0
+        else
+            echo -e "${RED}✗ ${container}: $status${NC}"
+            return 1
+        fi
+    else
+        echo -e "${RED}✗ ${container}: Not found${NC}"
+        return 1
+    fi
+}
+
+# Function to check port connectivity (cross-platform)
+check_port() {
+    local host=$1
+    local port=$2
+    local service=$3
+    
+    # Try using nc (netcat) first - works on both Linux and macOS
+    if command -v nc >/dev/null 2>&1; then
+        if nc -z -w 2 "$host" "$port" 2>/dev/null; then
+            echo -e "${GREEN}✓ ${service} (${host}:${port}): Accessible${NC}"
+            return 0
+        fi
+    # Fallback to /dev/tcp for Linux (bash builtin)
+    elif timeout 2 bash -c "cat < /dev/null > /dev/tcp/$host/$port" 2>/dev/null; then
+        echo -e "${GREEN}✓ ${service} (${host}:${port}): Accessible${NC}"
+        return 0
+    fi
+    
+    echo -e "${RED}✗ ${service} (${host}:${port}): Not accessible${NC}"
+    return 1
+}
+
+# Function to check HTTP endpoint
+check_http() {
+    local url=$1
+    local service=$2
+    if curl -s -f -m 2 "$url" > /dev/null 2>&1; then
+        echo -e "${GREEN}✓ ${service} (${url}): Accessible${NC}"
+        return 0
+    else
+        echo -e "${RED}✗ ${service} (${url}): Not accessible${NC}"
+        return 1
+    fi
+}
+
+
+# Check containers
+echo -e "${YELLOW}Checking containers...${NC}"
+ETCD_COUNT=${ETCD_COUNT:-3}
+for ei in $(seq 1 "$ETCD_COUNT"); do
+    check_container "etcd${ei}"
+done
+for db in "${DB_NODES[@]}"; do
+    check_container "$db"
+done
+check_container "haproxy"
+check_container "barman"
+check_container "pgbouncer"
+check_container "pgbouncer-ro"
+echo ""
+
+# Check etcd connectivity
+echo -e "${YELLOW}Checking etcd cluster...${NC}"
+for ei in $(seq 1 "${ETCD_COUNT:-3}"); do
+    if docker exec "etcd${ei}" etcdctl endpoint health --endpoints="http://etcd${ei}:2379" 2>/dev/null | grep -q "healthy"; then
+        echo -e "${GREEN}✓ etcd${ei}: Healthy${NC}"
+    else
+        echo -e "${RED}✗ etcd${ei}: Unhealthy${NC}"
+    fi
+done
+echo ""
+
+# Check Patroni REST API (from inside containers)
+echo -e "${YELLOW}Checking Patroni REST API...${NC}"
+# Use Python to parse JSON properly - Patroni API is on port 8001 inside containers
+INTERNAL_API_PORT=$(get_internal_api_port)
+for db in "${DB_NODES[@]}"; do
+    db_role=$(docker exec "$db" sh -c "curl -s http://localhost:${INTERNAL_API_PORT}/patroni 2>/dev/null | python3 -c 'import sys, json; print(json.load(sys.stdin).get(\"role\", \"unknown\"))'" 2>/dev/null || echo "unknown")
+    if [ "$db_role" = "Leader" ] || [ "$db_role" = "Replica" ] || [ "$db_role" = "primary" ] || [ "$db_role" = "replica" ]; then
+        echo -e "${GREEN}✓ ${db} Patroni API: ${db_role}${NC}"
+    else
+        echo -e "${RED}✗ ${db} Patroni API: ${db_role} (not responding properly)${NC}"
+    fi
+done
+
+echo ""
+
+# Split-brain detection
+echo ""
+echo -e "${YELLOW}=== Split-Brain Detection ===${NC}"
+LEADER_COUNT=0
+for db in "${DB_NODES[@]}"; do
+    local_num=$(get_node_num "$db")
+    local_api_port=$(get_api_port "$local_num")
+    role=$(curl -s "http://localhost:${local_api_port}/patroni" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('role',''))" 2>/dev/null)
+    if [ "$role" = "master" ] || [ "$role" = "primary" ]; then
+        LEADER_COUNT=$((LEADER_COUNT + 1))
+    fi
+done
+if [ "$LEADER_COUNT" -eq 1 ]; then
+    echo -e "${GREEN}✓ Exactly 1 leader found — no split-brain${NC}"
+elif [ "$LEADER_COUNT" -eq 0 ]; then
+    echo -e "${RED}✗ CRITICAL: No leader found! Cluster has no primary.${NC}"
+else
+    echo -e "${RED}✗ CRITICAL: SPLIT-BRAIN DETECTED! $LEADER_COUNT leaders found!${NC}"
+fi
+
+# Replication lag check
+echo ""
+echo -e "${YELLOW}=== Replication Lag ===${NC}"
+# Find leader container
+LEADER_CONTAINER=""
+for db in "${DB_NODES[@]}"; do
+    local_num=$(get_node_num "$db")
+    local_api_port=$(get_api_port "$local_num")
+    role=$(curl -s "http://localhost:${local_api_port}/patroni" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('role',''))" 2>/dev/null)
+    if [ "$role" = "master" ] || [ "$role" = "primary" ]; then
+        LEADER_CONTAINER=$db
+        break
+    fi
+done
+if [ -n "$LEADER_CONTAINER" ]; then
+    LAG_OUTPUT=$(docker exec "$LEADER_CONTAINER" psql -U "${POSTGRES_USER:-postgres}" -p 5431 -t -A -c \
+        "SELECT application_name, state, pg_wal_lsn_diff(sent_lsn, replay_lsn) as lag_bytes FROM pg_stat_replication ORDER BY application_name;" 2>/dev/null)
+    if [ -n "$LAG_OUTPUT" ]; then
+        echo "$LAG_OUTPUT" | while IFS='|' read -r app state lag; do
+            if [ -n "$app" ]; then
+                lag_mb=$(echo "scale=2; ${lag:-0} / 1048576" | bc 2>/dev/null || echo "0")
+                if [ "$(echo "$lag > 1048576" | bc 2>/dev/null)" = "1" ]; then
+                    echo -e "  ${RED}✗ $app: ${lag_mb} MB lag ($state)${NC}"
+                else
+                    echo -e "  ${GREEN}✓ $app: ${lag_mb} MB lag ($state)${NC}"
+                fi
+            fi
+        done
+    else
+        echo -e "  ${YELLOW}No active replication connections found${NC}"
+    fi
+else
+    echo -e "  ${RED}Cannot check lag — no leader found${NC}"
+fi
+
+# Barman backup status
+echo ""
+echo -e "${YELLOW}=== Barman Backup Status ===${NC}"
+for srv in "${DB_NODES[@]}"; do
+    BARMAN_CHECK=$(docker exec barman barman check "$srv" --nagios 2>/dev/null)
+    BARMAN_EXIT=$?
+    if [ $BARMAN_EXIT -eq 0 ]; then
+        echo -e "  ${GREEN}✓ $srv: OK${NC}"
+    elif [ $BARMAN_EXIT -eq 1 ]; then
+        echo -e "  ${YELLOW}⚠ $srv: WARNING — $BARMAN_CHECK${NC}"
+    else
+        echo -e "  ${RED}✗ $srv: CRITICAL — $BARMAN_CHECK${NC}"
+    fi
+done
+echo ""
+
+# Check PostgreSQL connectivity
+echo -e "${YELLOW}Checking PostgreSQL connectivity...${NC}"
+for db in "${DB_NODES[@]}"; do
+    if docker exec $db pg_isready -U "${POSTGRES_USER:-postgres}" -p 5431 > /dev/null 2>&1; then
+        echo -e "${GREEN}✓ ${db} PostgreSQL: Ready${NC}"
+    else
+        echo -e "${RED}✗ ${db} PostgreSQL: Not ready${NC}"
+    fi
+done
+echo ""
+
+# Check PgBouncer connectivity
+echo -e "${YELLOW}Checking PgBouncer connectivity...${NC}"
+if docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" pgbouncer psql -h 127.0.0.1 -p 6432 -U "${POSTGRES_USER:-postgres}" -d "${DEFAULT_DATABASE:-maborak}" -c "SELECT 1" > /dev/null 2>&1; then
+    echo -e "${GREEN}✓ PgBouncer (RW): Ready${NC}"
+else
+    echo -e "${RED}✗ PgBouncer (RW): Not ready (Authentication or backend issue)${NC}"
+fi
+
+if docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" pgbouncer-ro psql -h 127.0.0.1 -p 6432 -U "${POSTGRES_USER:-postgres}" -d "${DEFAULT_DATABASE:-maborak}" -c "SELECT 1" > /dev/null 2>&1; then
+    echo -e "${GREEN}✓ PgBouncer (RO): Ready${NC}"
+else
+    echo -e "${RED}✗ PgBouncer (RO): Not ready (Authentication or backend issue)${NC}"
+fi
+echo ""
+
+# Check HAProxy
+if docker exec haproxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg > /dev/null 2>&1; then
+    echo -e "${GREEN}✓ HAProxy: Configuration valid${NC}"
+else
+    echo -e "${RED}✗ HAProxy: Configuration invalid${NC}"
+fi
+echo ""
+
+# Check SSH key permissions (before connectivity tests)
+echo -e "${YELLOW}Checking SSH key permissions (comprehensive)...${NC}"
+
+SSH_KEY_ISSUES=0
+
+# Function to check key permissions
+check_key_permissions() {
+    local container=$1
+    local key_path=$2
+    local description=$3
+    local user=${4:-root}
+    local result=0
+    
+    # Test if key exists
+    if [ "$user" = "root" ]; then
+        if ! docker exec "$container" test -f "$key_path" 2>/dev/null; then
+            echo -e "${YELLOW}  ⚠ ${description}: Not found${NC}"
+            return 2
+        fi
+        KEY_PERMS=$(docker exec "$container" stat -c "%a" "$key_path" 2>/dev/null || docker exec "$container" ls -l "$key_path" 2>/dev/null | awk '{print $1}')
+    else
+        if ! docker exec -u "$user" "$container" test -f "$key_path" 2>/dev/null; then
+            echo -e "${YELLOW}  ⚠ ${description}: Not found${NC}"
+            return 2
+        fi
+        KEY_PERMS=$(docker exec -u "$user" "$container" stat -c "%a" "$key_path" 2>/dev/null || docker exec -u "$user" "$container" ls -l "$key_path" 2>/dev/null | awk '{print $1}')
+    fi
+    
+    # Check permissions
+    if [ "$KEY_PERMS" = "600" ] || echo "$KEY_PERMS" | grep -q "^-rw-------"; then
+        echo -e "${GREEN}  ✓ ${description}: Correct permissions (600)${NC}"
+        return 0
+    else
+        echo -e "${RED}  ✗ ${description}: Wrong permissions: $KEY_PERMS (expected 600)${NC}"
+        return 1
+    fi
+}
+
+# Check SSH keys for Patroni nodes (to connect to Barman)
+echo -e "${BLUE}  Patroni nodes SSH keys (for Barman access):${NC}"
+for db in "${DB_NODES[@]}"; do
+    if docker ps --format '{{.Names}}' | grep -q "^${db}$"; then
+        # Get postgres home directory (usually /var/lib/postgresql)
+        POSTGRES_HOME=$(docker exec "$db" getent passwd postgres 2>/dev/null | cut -d: -f6 || echo "/var/lib/postgresql")
+        
+        # Primary location: id_rsa (default SSH key, set up by entrypoint.sh)
+        check_key_permissions "$db" "$POSTGRES_HOME/.ssh/id_rsa" "${db}: $POSTGRES_HOME/.ssh/id_rsa (primary)" "postgres"
+        RET=$?
+        if [ $RET -eq 1 ]; then
+            ((SSH_KEY_ISSUES++))
+        fi
+        
+        # Alternative location: barman_rsa (backward compatibility, set up by entrypoint.sh)
+        check_key_permissions "$db" "$POSTGRES_HOME/.ssh/barman_rsa" "${db}: $POSTGRES_HOME/.ssh/barman_rsa (compat)" "postgres"
+        RET=$?
+        if [ $RET -eq 1 ]; then
+            ((SSH_KEY_ISSUES++))
+        fi
+        
+        # Check .ssh directory permissions (should be 700)
+        if docker exec "$db" test -d "$POSTGRES_HOME/.ssh" 2>/dev/null; then
+            DIR_PERMS=$(docker exec "$db" stat -c "%a" "$POSTGRES_HOME/.ssh" 2>/dev/null || docker exec "$db" ls -ld "$POSTGRES_HOME/.ssh" 2>/dev/null | awk '{print $1}' | cut -c1-10)
+            if [ "$DIR_PERMS" != "700" ] && ! echo "$DIR_PERMS" | grep -q "^drwx------"; then
+                echo -e "${YELLOW}  ⚠ ${db}: $POSTGRES_HOME/.ssh has wrong permissions: $DIR_PERMS (expected 700)${NC}"
+            fi
+        fi
+    else
+        echo -e "${YELLOW}  ⚠ ${db}: Container not running${NC}"
+    fi
+done
+
+# Check SSH keys for Barman (to connect to Patroni nodes)
+echo -e "${BLUE}  Barman SSH keys (for Patroni access):${NC}"
+if docker ps --format '{{.Names}}' | grep -q "^barman$"; then
+    # Get Barman's actual home directory (usually /var/lib/barman)
+    BARMAN_HOME=$(docker exec barman getent passwd barman 2>/dev/null | cut -d: -f6 || echo "/var/lib/barman")
+    
+    # Check primary location (actual home directory - set up by entrypoint.sh)
+    check_key_permissions "barman" "$BARMAN_HOME/.ssh/id_rsa" "barman: $BARMAN_HOME/.ssh/id_rsa (primary)" "barman"
+    RET=$?
+    if [ $RET -eq 1 ]; then
+        ((SSH_KEY_ISSUES++))
+    fi
+    
+    # Check alternative location (/home/barman) - optional, for loopback connections
+    # Only warn if it exists but has wrong permissions, not if it's missing
+    if docker exec barman test -f /home/barman/.ssh/id_rsa 2>/dev/null; then
+        check_key_permissions "barman" "/home/barman/.ssh/id_rsa" "barman: /home/barman/.ssh/id_rsa (optional)" "barman"
+        RET=$?
+        if [ $RET -eq 1 ]; then
+            ((SSH_KEY_ISSUES++))
+        fi
+    fi
+    
+    # Check .ssh directory permissions (check actual home and optional /home/barman if it exists)
+    for ssh_dir in "$BARMAN_HOME/.ssh" "/home/barman/.ssh"; do
+        if docker exec barman test -d "$ssh_dir" 2>/dev/null; then
+            DIR_PERMS=$(docker exec barman stat -c "%a" "$ssh_dir" 2>/dev/null || docker exec barman ls -ld "$ssh_dir" 2>/dev/null | awk '{print $1}' | cut -c1-10)
+            if [ "$DIR_PERMS" != "700" ] && ! echo "$DIR_PERMS" | grep -q "^drwx------"; then
+                echo -e "${YELLOW}  ⚠ barman: $ssh_dir has wrong permissions: $DIR_PERMS (expected 700)${NC}"
+            fi
+        fi
+    done
+else
+    echo -e "${YELLOW}  ⚠ barman: Container not running${NC}"
+fi
+
+# Check for PITR-specific scenarios
+echo -e "${BLUE}  PITR-specific key checks (for perform_pitr.sh):${NC}"
+for db in "${DB_NODES[@]}"; do
+    if docker ps --format '{{.Names}}' | grep -q "^${db}$"; then
+        # Check if key exists in location perform_pitr.sh expects for barman-wal-restore
+        POSTGRES_HOME=$(docker exec "$db" getent passwd postgres 2>/dev/null | cut -d: -f6 || echo "/var/lib/postgresql")
+        
+        # perform_pitr.sh checks these locations in order:
+        # 1. $POSTGRES_HOME/.ssh/id_rsa (primary, set up by entrypoint.sh)
+        # 2. $POSTGRES_HOME/.ssh/barman_rsa (backward compatibility)
+        # Note: All keys are now in the postgres user's actual home directory
+        
+        KEY_FOUND=false
+        KEY_FOUND_WITH_GOOD_PERMS=false
+        for key_path in "$POSTGRES_HOME/.ssh/id_rsa" "$POSTGRES_HOME/.ssh/barman_rsa"; do
+            if docker exec "$db" test -f "$key_path" 2>/dev/null; then
+                KEY_FOUND=true
+                check_key_permissions "$db" "$key_path" "${db}: $key_path (PITR)" "postgres"
+                RET=$?
+                if [ $RET -eq 0 ]; then
+                    KEY_FOUND_WITH_GOOD_PERMS=true
+                    break
+                elif [ $RET -eq 1 ]; then
+                    ((SSH_KEY_ISSUES++))
+                fi
+            fi
+        done
+        
+        if [ "$KEY_FOUND" = "false" ]; then
+            echo -e "${YELLOW}  ⚠ ${db}: No SSH key found in PITR-expected locations${NC}"
+            echo -e "${CYAN}    perform_pitr.sh expects key at one of:${NC}"
+            echo -e "${CYAN}    - $POSTGRES_HOME/.ssh/id_rsa (primary, set up by entrypoint.sh)${NC}"
+            echo -e "${CYAN}    - $POSTGRES_HOME/.ssh/barman_rsa (backward compatibility)${NC}"
+            echo -e "${CYAN}    Note: perform_pitr.sh will copy barman_rsa to id_rsa if needed and${NC}"
+            echo -e "${CYAN}    automatically set correct permissions (600 for key, 700 for .ssh directory)${NC}"
+        elif [ "$KEY_FOUND_WITH_GOOD_PERMS" = "false" ]; then
+            echo -e "${YELLOW}  ⚠ ${db}: SSH key found but has permission issues (PITR may fail)${NC}"
+            echo -e "${CYAN}    Error: 'barman@barman: Permission denied (publickey)' during recovery${NC}"
+            echo -e "${CYAN}    Fix: Ensure key at $POSTGRES_HOME/.ssh/id_rsa has 600 permissions${NC}"
+        fi
+        
+        # Check .ssh directory permissions for PITR
+        if docker exec "$db" test -d "$POSTGRES_HOME/.ssh" 2>/dev/null; then
+            DIR_PERMS=$(docker exec "$db" stat -c "%a" "$POSTGRES_HOME/.ssh" 2>/dev/null || docker exec "$db" ls -ld "$POSTGRES_HOME/.ssh" 2>/dev/null | awk '{print $1}' | cut -c1-10)
+            if [ "$DIR_PERMS" != "700" ] && ! echo "$DIR_PERMS" | grep -q "^drwx------"; then
+                echo -e "${YELLOW}  ⚠ ${db}: $POSTGRES_HOME/.ssh (PITR) has wrong permissions: $DIR_PERMS (expected 700)${NC}"
+            fi
+        fi
+    fi
+done
+
+# Summary of SSH key checks
+if [ $SSH_KEY_ISSUES -eq 0 ]; then
+    echo -e "${GREEN}✓ All SSH key permissions are correct${NC}"
+else
+    echo -e "${YELLOW}⚠ SSH key permission issues detected: $SSH_KEY_ISSUES issue(s)${NC}"
+    echo -e "${CYAN}  This may cause:${NC}"
+    echo -e "${CYAN}    - WAL archiving failures${NC}"
+    echo -e "${CYAN}    - PITR recovery failures with: 'barman@barman: Permission denied (publickey)'${NC}"
+    echo -e "${CYAN}    - Backup operation failures${NC}"
+    echo ""
+    echo -e "${CYAN}  To fix permissions, run inside container:${NC}"
+    echo -e "${CYAN}    docker exec <container> chmod 600 <key_path>${NC}"
+    echo -e "${CYAN}    docker exec <container> chmod 700 <ssh_directory>${NC}"
+    echo ""
+    echo -e "${CYAN}  For Patroni nodes (as postgres user) - fixes PITR recovery:${NC}"
+    echo -e "${CYAN}    docker exec <db> su - postgres -c 'mkdir -p ~/.ssh && chmod 700 ~/.ssh'${NC}"
+    echo -e "${CYAN}    docker exec <db> su - postgres -c 'cp /var/lib/postgresql/.ssh/barman_rsa ~/.ssh/id_rsa 2>/dev/null || true'${NC}"
+    echo -e "${CYAN}    docker exec <db> su - postgres -c 'chmod 600 ~/.ssh/id_rsa'${NC}"
+    echo -e "${CYAN}  For Barman (as barman user):${NC}"
+    echo -e "${CYAN}    docker exec -u barman barman chmod 600 ~/.ssh/id_rsa && chmod 700 ~/.ssh${NC}"
+fi
+echo ""
+
+# Check SSH connectivity (critical for WAL archiving)
+echo -e "${YELLOW}Checking SSH connectivity...${NC}"
+
+# Helper function to extract SSH error message
+extract_ssh_error() {
+    local ssh_output="$1"
+    local error_msg=$(echo "$ssh_output" | \
+        grep -v "Permanently added" | \
+        grep -v "Warning:" | \
+        grep -v "^@@@@@" | \
+        grep -v "^$" | \
+        grep -v "^The authenticity" | \
+        grep -v "^Are you sure" | \
+        grep -E "(Permission denied|Connection refused|Connection timed out|Host key verification failed|Could not resolve|No route to host|Connection closed|Authentication failed|ssh_exchange_identification)" | \
+        head -1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    # If no specific error found, get first meaningful line
+    if [ -z "$error_msg" ]; then
+        error_msg=$(echo "$ssh_output" | \
+            grep -v "Permanently added" | \
+            grep -v "Warning:" | \
+            grep -v "^@@@@@" | \
+            grep -v "^$" | \
+            grep -v "^The authenticity" | \
+            grep -v "^Are you sure" | \
+            head -1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    fi
+    # Truncate long error messages
+    if [ ${#error_msg} -gt 80 ]; then
+        error_msg="${error_msg:0:77}..."
+    fi
+    echo "$error_msg"
+}
+
+# Check SSH from Patroni nodes to Barman
+SSH_PATRONI_TO_BARMAN_SUCCESS=0
+SSH_PATRONI_TO_BARMAN_FAIL=0
+echo -e "${BLUE}  From Patroni nodes to Barman:${NC}"
+for db in "${DB_NODES[@]}"; do
+    if docker ps --format '{{.Names}}' | grep -q "^${db}$"; then
+        # Get postgres home directory for SSH key location
+        POSTGRES_HOME=$(docker exec "$db" getent passwd postgres 2>/dev/null | cut -d: -f6 || echo "/var/lib/postgresql")
+        
+        # Check as postgres user
+        SSH_OUTPUT=$(docker exec ${db} su - postgres -c "ssh -i $POSTGRES_HOME/.ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 barman@barman 'echo SSH_SUCCESS' 2>&1" 2>&1)
+        SSH_EXIT_CODE=$?
+        if [ $SSH_EXIT_CODE -eq 0 ]; then
+            echo -e "${GREEN}  ✓ ${db} (postgres) → barman: Connected${NC}"
+            ((SSH_PATRONI_TO_BARMAN_SUCCESS++))
+        else
+            ERROR_MSG=$(extract_ssh_error "$SSH_OUTPUT")
+            if [ -n "$ERROR_MSG" ]; then
+                echo -e "${RED}  ✗ ${db} (postgres) → barman: Failed${NC} ${YELLOW}(Error: ${ERROR_MSG})${NC}"
+            else
+                echo -e "${RED}  ✗ ${db} (postgres) → barman: Failed${NC}"
+            fi
+            ((SSH_PATRONI_TO_BARMAN_FAIL++))
+        fi
+        
+        # Check as root user
+        SSH_OUTPUT=$(docker exec ${db} ssh -i /root/.ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 barman@barman 'echo SSH_SUCCESS' 2>&1)
+        SSH_EXIT_CODE=$?
+        if [ $SSH_EXIT_CODE -eq 0 ]; then
+            echo -e "${GREEN}  ✓ ${db} (root) → barman: Connected${NC}"
+            ((SSH_PATRONI_TO_BARMAN_SUCCESS++))
+        else
+            ERROR_MSG=$(extract_ssh_error "$SSH_OUTPUT")
+            if [ -n "$ERROR_MSG" ]; then
+                echo -e "${RED}  ✗ ${db} (root) → barman: Failed${NC} ${YELLOW}(Error: ${ERROR_MSG})${NC}"
+            else
+                echo -e "${RED}  ✗ ${db} (root) → barman: Failed${NC}"
+            fi
+            ((SSH_PATRONI_TO_BARMAN_FAIL++))
+        fi
+    else
+        echo -e "${YELLOW}  ⚠ ${db}: Container not running${NC}"
+        ((SSH_PATRONI_TO_BARMAN_FAIL+=2))
+    fi
+done
+
+# Check SSH from Barman to Patroni nodes
+SSH_BARMAN_TO_PATRONI_SUCCESS=0
+SSH_BARMAN_TO_PATRONI_FAIL=0
+echo -e "${BLUE}  From Barman to Patroni nodes:${NC}"
+if docker ps --format '{{.Names}}' | grep -q "^barman$"; then
+    # Get Barman's home directory
+    BARMAN_HOME=$(docker exec barman getent passwd barman 2>/dev/null | cut -d: -f6 || echo "/var/lib/barman")
+    
+    for db in "${DB_NODES[@]}"; do
+        if docker ps --format '{{.Names}}' | grep -q "^${db}$"; then
+            # Check as barman user
+            SSH_OUTPUT=$(docker exec -u barman barman ssh -i "$BARMAN_HOME/.ssh/id_rsa" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o ServerAliveInterval=2 -o ServerAliveCountMax=3 postgres@${db} 'echo SSH_SUCCESS' 2>&1)
+            SSH_EXIT_CODE=$?
+            if [ $SSH_EXIT_CODE -eq 0 ]; then
+                echo -e "${GREEN}  ✓ barman (barman) → ${db}: Connected${NC}"
+                ((SSH_BARMAN_TO_PATRONI_SUCCESS++))
+            else
+                ERROR_MSG=$(extract_ssh_error "$SSH_OUTPUT")
+                if [ -n "$ERROR_MSG" ]; then
+                    echo -e "${RED}  ✗ barman (barman) → ${db}: Failed${NC} ${YELLOW}(Error: ${ERROR_MSG})${NC}"
+                else
+                    echo -e "${RED}  ✗ barman (barman) → ${db}: Failed${NC}"
+                fi
+                ((SSH_BARMAN_TO_PATRONI_FAIL++))
+            fi
+            
+            # Check as root user
+            SSH_OUTPUT=$(docker exec barman ssh -i /root/.ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o ServerAliveInterval=2 -o ServerAliveCountMax=3 postgres@${db} 'echo SSH_SUCCESS' 2>&1)
+            SSH_EXIT_CODE=$?
+            if [ $SSH_EXIT_CODE -eq 0 ]; then
+                echo -e "${GREEN}  ✓ barman (root) → ${db}: Connected${NC}"
+                ((SSH_BARMAN_TO_PATRONI_SUCCESS++))
+            else
+                ERROR_MSG=$(extract_ssh_error "$SSH_OUTPUT")
+                if [ -n "$ERROR_MSG" ]; then
+                    echo -e "${RED}  ✗ barman (root) → ${db}: Failed${NC} ${YELLOW}(Error: ${ERROR_MSG})${NC}"
+                else
+                    echo -e "${RED}  ✗ barman (root) → ${db}: Failed${NC}"
+                fi
+                ((SSH_BARMAN_TO_PATRONI_FAIL++))
+            fi
+        else
+            echo -e "${YELLOW}  ⚠ ${db}: Container not running${NC}"
+            ((SSH_BARMAN_TO_PATRONI_FAIL+=2))
+        fi
+    done
+else
+    echo -e "${YELLOW}  ⚠ barman: Container not running${NC}"
+    SSH_BARMAN_TO_PATRONI_FAIL=8
+fi
+
+# Check SSH between Patroni nodes (DB to DB)
+SSH_PATRONI_TO_PATRONI_SUCCESS=0
+SSH_PATRONI_TO_PATRONI_FAIL=0
+echo -e "${BLUE}  From Patroni nodes to other Patroni nodes:${NC}"
+for db_from in "${DB_NODES[@]}"; do
+    if docker ps --format '{{.Names}}' | grep -q "^${db_from}$"; then
+        # Get postgres home directory for SSH key location
+        POSTGRES_HOME=$(docker exec "$db_from" getent passwd postgres 2>/dev/null | cut -d: -f6 || echo "/var/lib/postgresql")
+        
+        for db_to in "${DB_NODES[@]}"; do
+            # Skip self-connection
+            if [ "$db_from" = "$db_to" ]; then
+                continue
+            fi
+            
+            if docker ps --format '{{.Names}}' | grep -q "^${db_to}$"; then
+                # Check as postgres user
+                SSH_OUTPUT=$(docker exec ${db_from} su - postgres -c "ssh -i $POSTGRES_HOME/.ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 postgres@${db_to} 'echo SSH_SUCCESS' 2>&1" 2>&1)
+                SSH_EXIT_CODE=$?
+                if [ $SSH_EXIT_CODE -eq 0 ]; then
+                    echo -e "${GREEN}  ✓ ${db_from} (postgres) → ${db_to}: Connected${NC}"
+                    ((SSH_PATRONI_TO_PATRONI_SUCCESS++))
+                else
+                    ERROR_MSG=$(extract_ssh_error "$SSH_OUTPUT")
+                    if [ -n "$ERROR_MSG" ]; then
+                        echo -e "${RED}  ✗ ${db_from} (postgres) → ${db_to}: Failed${NC} ${YELLOW}(Error: ${ERROR_MSG})${NC}"
+                    else
+                        echo -e "${RED}  ✗ ${db_from} (postgres) → ${db_to}: Failed${NC}"
+                    fi
+                    ((SSH_PATRONI_TO_PATRONI_FAIL++))
+                fi
+                
+                # Check as root user
+                SSH_OUTPUT=$(docker exec ${db_from} ssh -i /root/.ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 postgres@${db_to} 'echo SSH_SUCCESS' 2>&1)
+                SSH_EXIT_CODE=$?
+                if [ $SSH_EXIT_CODE -eq 0 ]; then
+                    echo -e "${GREEN}  ✓ ${db_from} (root) → ${db_to}: Connected${NC}"
+                    ((SSH_PATRONI_TO_PATRONI_SUCCESS++))
+                else
+                    ERROR_MSG=$(extract_ssh_error "$SSH_OUTPUT")
+                    if [ -n "$ERROR_MSG" ]; then
+                        echo -e "${RED}  ✗ ${db_from} (root) → ${db_to}: Failed${NC} ${YELLOW}(Error: ${ERROR_MSG})${NC}"
+                    else
+                        echo -e "${RED}  ✗ ${db_from} (root) → ${db_to}: Failed${NC}"
+                    fi
+                    ((SSH_PATRONI_TO_PATRONI_FAIL++))
+                fi
+            else
+                echo -e "${YELLOW}  ⚠ ${db_to}: Container not running (skipping ${db_from} → ${db_to})${NC}"
+                ((SSH_PATRONI_TO_PATRONI_FAIL+=2))
+            fi
+        done
+    else
+        echo -e "${YELLOW}  ⚠ ${db_from}: Container not running${NC}"
+        # Count failures for all other nodes (3 nodes × 2 users = 6)
+        ((SSH_PATRONI_TO_PATRONI_FAIL+=6))
+    fi
+done
+
+if [ $SSH_PATRONI_TO_BARMAN_FAIL -gt 0 ] || [ $SSH_BARMAN_TO_PATRONI_FAIL -gt 0 ] || [ $SSH_PATRONI_TO_PATRONI_FAIL -gt 0 ]; then
+    echo -e "${YELLOW}Note: SSH connectivity is required for WAL archiving and cluster operations. Some connections failed.${NC}"
+fi
+echo ""
+
+# Check external ports (informational - may not be accessible from host)
+echo -e "${YELLOW}Checking external ports (from host)...${NC}"
+PORT_CHECKS=0
+PORT_SUCCESS=0
+
+ETCD_COUNT=${ETCD_COUNT:-3}
+for ei in $(seq 1 "$ETCD_COUNT"); do
+    eval eport="\${ETCD${ei}_CLIENT_PORT:-$(( ei == 1 ? 2379 : ei * 10000 + 2379 ))}"
+    if check_port "localhost" "$eport" "etcd${ei}"; then ((PORT_SUCCESS++)); fi
+    ((PORT_CHECKS++))
+done
+for db in "${DB_NODES[@]}"; do
+    local_num=$(get_node_num "$db")
+    local_db_port=$(get_db_port "$local_num")
+    local_api_port=$(get_api_port "$local_num")
+    if check_port "localhost" "${local_db_port}" "$db"; then ((PORT_SUCCESS++)); fi
+    ((PORT_CHECKS++))
+    if check_port "localhost" "${local_api_port}" "$db Patroni API"; then ((PORT_SUCCESS++)); fi
+    ((PORT_CHECKS++))
+done
+if check_port "localhost" "${HAPROXY_WRITE_PORT}" "HAProxy Write"; then ((PORT_SUCCESS++)); fi
+((PORT_CHECKS++))
+if check_port "localhost" "${HAPROXY_READ_PORT}" "HAProxy Read"; then ((PORT_SUCCESS++)); fi
+((PORT_CHECKS++))
+if check_port "localhost" "${HAPROXY_STATS_PORT}" "HAProxy Stats"; then ((PORT_SUCCESS++)); fi
+((PORT_CHECKS++))
+if check_port "localhost" "${PGBOUNCER_PORT}" "PgBouncer (RW)"; then ((PORT_SUCCESS++)); fi
+((PORT_CHECKS++))
+if check_port "localhost" "${PGBOUNCER_RO_PORT}" "PgBouncer (RO)"; then ((PORT_SUCCESS++)); fi
+((PORT_CHECKS++))
+
+if [ $PORT_SUCCESS -lt $PORT_CHECKS ]; then
+    echo -e "${YELLOW}Note: Some ports may not be accessible from host. This is normal if containers are still starting.${NC}"
+fi
+echo ""
+
+# Get cluster status
+echo -e "${YELLOW}Patroni Cluster Status:${NC}"
+if docker exec db1 patronictl -c /etc/patroni/patroni.yml list 2>/dev/null; then
+    echo ""
+else
+    echo -e "${RED}Could not retrieve cluster status${NC}"
+    echo ""
+fi
+
+# Summary
+echo -e "${BLUE}========================================${NC}"
+echo -e "${BLUE}  Entrypoints and Usage${NC}"
+echo -e "${BLUE}========================================${NC}"
+echo ""
+
+echo -e "${GREEN}PostgreSQL Connections:${NC}"
+echo ""
+echo -e "${YELLOW}For WRITE operations (routes to leader only):${NC}"
+echo -e "  ${CYAN}psql -h localhost -p ${HAPROXY_WRITE_PORT} -U postgres -d ${DEFAULT_DATABASE}${NC}"
+echo "  # Connection URL (without password - will prompt):"
+echo -e "  ${CYAN}postgresql://postgres@localhost:${HAPROXY_WRITE_PORT}/${DEFAULT_DATABASE}${NC}"
+echo "  # Connection URL (with password):"
+echo -e "  ${CYAN}postgresql://postgres:${POSTGRES_PASSWORD}@localhost:${HAPROXY_WRITE_PORT}/${DEFAULT_DATABASE}${NC}"
+echo ""
+echo -e "${YELLOW}PgBouncer (Recommended):${NC}"
+echo "  For WRITE operations:"
+echo -e "  ${CYAN}psql -h localhost -p ${PGBOUNCER_PORT} -U postgres -d ${DEFAULT_DATABASE}${NC}"
+echo ""
+echo "  For READ operations (Replicas):"
+echo -e "  ${CYAN}psql -h localhost -p ${PGBOUNCER_RO_PORT} -U postgres -d ${DEFAULT_DATABASE}${NC}"
+echo ""
+echo -e "${YELLOW}For READ operations (routes to replicas only, round-robin):${NC}"
+echo -e "  ${CYAN}psql -h localhost -p ${HAPROXY_READ_PORT} -U postgres -d ${DEFAULT_DATABASE}${NC}"
+echo "  # Connection URL (without password - will prompt):"
+echo -e "  ${CYAN}postgresql://postgres@localhost:${HAPROXY_READ_PORT}/${DEFAULT_DATABASE}${NC}"
+echo "  # Connection URL (with password):"
+echo -e "  ${CYAN}postgresql://postgres:${POSTGRES_PASSWORD}@localhost:${HAPROXY_READ_PORT}/${DEFAULT_DATABASE}${NC}"
+echo ""
+echo -e "${YELLOW}Direct connections (bypass HAProxy):${NC}"
+for db in "${DB_NODES[@]}"; do
+    local_num=$(get_node_num "$db")
+    local_db_port=$(get_db_port "$local_num")
+    echo "  # Direct connection to $db"
+    echo -e "  ${CYAN}psql -h localhost -p ${local_db_port} -U postgres -d ${DEFAULT_DATABASE}${NC}"
+    echo "  # Connection URL:"
+    echo -e "  ${CYAN}postgresql://postgres:${POSTGRES_PASSWORD}@localhost:${local_db_port}/${DEFAULT_DATABASE}${NC}"
+    echo ""
+done
+
+echo -e "${GREEN}Patroni REST API:${NC}"
+for db in "${DB_NODES[@]}"; do
+    local_num=$(get_node_num "$db")
+    local_api_port=$(get_api_port "$local_num")
+    echo "  # Check $db status"
+    echo -e "  ${CYAN}curl http://localhost:${local_api_port}/patroni${NC}"
+    echo ""
+done
+echo "  # Check cluster status"
+echo -e "  ${CYAN}docker exec -it ${DB_NODES[0]} patronictl -c /etc/patroni/patroni.yml list${NC}"
+echo ""
+
+echo -e "${GREEN}HAProxy Stats:${NC}"
+echo "  # View HAProxy statistics"
+echo -e "  ${CYAN}curl http://localhost:${HAPROXY_STATS_PORT}/stats${NC}"
+echo -e "  # Or open in browser: ${CYAN}http://localhost:${HAPROXY_STATS_PORT}/stats${NC}"
+echo ""
+
+echo -e "${GREEN}etcd Access:${NC}"
+echo "  # Check etcd1 health"
+echo -e "  ${CYAN}docker exec -it etcd1 etcdctl endpoint health --endpoints=http://etcd1:2379${NC}"
+echo ""
+echo "  # Check etcd2 health"
+echo -e "  ${CYAN}docker exec -it etcd2 etcdctl endpoint health --endpoints=http://etcd2:2379${NC}"
+echo ""
+
+echo -e "${GREEN}Useful Commands:${NC}"
+echo "  # View all logs"
+echo -e "  ${CYAN}docker-compose logs -f${NC}"
+echo ""
+echo "  # View specific service logs"
+echo -e "  ${CYAN}docker-compose logs -f db1${NC}"
+echo -e "  ${CYAN}docker-compose logs -f db2${NC}"
+echo -e "  ${CYAN}docker-compose logs -f haproxy${NC}"
+echo ""
+echo "  # Stop the stack"
+echo -e "  ${CYAN}docker-compose down${NC}"
+echo ""
+echo "  # Stop and remove volumes"
+echo -e "  ${CYAN}docker-compose down -v${NC}"
+echo ""
+echo "  # Restart a specific service"
+echo -e "  ${CYAN}docker-compose restart db1${NC}"
+echo ""
+
+echo -e "${BLUE}========================================${NC}"
+
