@@ -968,15 +968,19 @@ if [ "$EXISTS" = "1" ]; then
     elif [ "$CLEAN" = true ]; then
         echo -e "  ${CYAN}Mode:${NC}         ${YELLOW}${BOLD}DROP + RECREATE${NC} (target already exists)"
     else
-        echo ""
-        if [ "$REMOTE_MODE" = true ]; then
-            echo -e "${RED}✗ Target database '$TARGET' already exists on ${PG_HOST}:${PG_PORT}.${NC}" >&2
+        if [ "$INTERACTIVE" = true ]; then
+            echo -e "  ${CYAN}Mode:${NC}         ${YELLOW}TARGET EXISTS${NC} — choose action below"
         else
-            echo -e "${RED}✗ Target database '$TARGET' already exists on $NODE.${NC}" >&2
+            echo ""
+            if [ "$REMOTE_MODE" = true ]; then
+                echo -e "${RED}✗ Target database '$TARGET' already exists on ${PG_HOST}:${PG_PORT}.${NC}" >&2
+            else
+                echo -e "${RED}✗ Target database '$TARGET' already exists on $NODE.${NC}" >&2
+            fi
+            echo -e "${YELLOW}  Pass CLEAN=1 to drop and recreate, or TARGET=NAME to restore into a different DB.${NC}" >&2
+            echo -e "${YELLOW}  (No saved state file found for this archive+target — nothing to resume.)${NC}" >&2
+            exit 1
         fi
-        echo -e "${YELLOW}  Pass CLEAN=1 to drop and recreate, or TARGET=NAME to restore into a different DB.${NC}" >&2
-        echo -e "${YELLOW}  (No saved state file found for this archive+target — nothing to resume.)${NC}" >&2
-        exit 1
     fi
     if [ "$RESUME_MODE" != true ] && [ "$ACTIVE_COUNT" -gt 0 ]; then
         echo -e "  ${CYAN}Active conns:${NC} ${RED}${BOLD}${ACTIVE_COUNT}${NC} — will be ${YELLOW}terminated${NC}"
@@ -994,6 +998,35 @@ echo ""
 
 # --- Start / Cancel confirmation ----------------------------------------------
 if [ "$ASSUME_YES" = false ]; then
+    if [ "$EXISTS" = "1" ] && [ "$CLEAN" != true ] && [ "$INTERACTIVE" = true ]; then
+        echo ""
+        echo -e "${YELLOW}${BOLD}Target database '$TARGET' already exists on $NODE.${NC}"
+        echo -e "${YELLOW}Choose action:${NC}"
+        echo -e "  ${GREEN}d${NC}  Drop and recreate (CLEAN)"
+        echo -e "  ${CYAN}r${NC}  Restore into a different database name"
+        echo -e "  ${RED}c${NC}  Cancel"
+        echo -ne "${BOLD}Action [d/r/c]: ${NC}"
+        read -r choice
+        case "$choice" in
+            d|D|drop|DROP)
+                CLEAN=true
+                ;;
+            r|R|rename|RENAME)
+                echo -ne "${BOLD}New target database name: ${NC}"
+                read -r new_target
+                if [ -n "$new_target" ]; then
+                    TARGET="$new_target"
+                    # Re-check if new target exists
+                    EXISTS=0
+                else
+                    echo -e "${YELLOW}Cancelled.${NC}"; exit 1
+                fi
+                ;;
+            *)
+                echo -e "${YELLOW}Cancelled.${NC}"; exit 1
+                ;;
+        esac
+    fi
     if [ "$EXISTS" = "1" ] && [ "$CLEAN" = true ]; then
         if [ "$REMOTE_MODE" = true ]; then
             WARN="${RED}${BOLD}This will DROP '$TARGET' on REMOTE ${PG_HOST}:${PG_PORT}"
@@ -1159,7 +1192,7 @@ fi
 
 START_TS=$(date +%s)
 
-if [ "$RESUME_MODE" = true ]; thenif [ "$RESUME_MODE" = true ]; then
+if [ "$RESUME_MODE" = true ]; then
     echo -e "${YELLOW}[3/5] (skipped — RESUME mode preserves existing database '$TARGET')${NC}"
     echo -e "${YELLOW}[4/5] (skipped — RESUME mode reuses existing database '$TARGET')${NC}"
 else
