@@ -2,7 +2,8 @@
 
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$PROJECT_ROOT"
 
 # Load shared library (provides colors, .env, node discovery, leader detection)
 source "scripts/lib/common.sh"
@@ -47,7 +48,7 @@ if [ "$RUNNING_CONTAINERS" -eq 0 ]; then
     echo -e "${RED}ERROR: Stack is not running. Start it with: ${CYAN}docker-compose up -d${NC}"
     echo ""
     echo -e "${YELLOW}To start the stack:${NC}"
-    echo -e "  ${CYAN}cd $SCRIPT_DIR${NC}"
+    echo -e "  ${CYAN}cd $PROJECT_ROOT${NC}"
     echo -e "  ${CYAN}docker-compose up -d${NC}"
     exit 1
 fi

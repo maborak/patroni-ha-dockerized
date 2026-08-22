@@ -279,10 +279,10 @@ More: [docs/runbooks.md](docs/runbooks.md#troubleshooting) · [docs/checks.md](d
 │   ├── utils/wizard.sh      # interactive setup wizard (make wizard)
 │   ├── generate_configs.sh  # template renderer
 │   ├── lib/common.sh        # shared helpers (node discovery, leader detection)
+│   ├── checks/              # make check (health check suite)
 │   ├── ops/                 # switchover / replica checks / cross-cluster DR
 │   ├── pitr/                # PITR wizard + recovery monitor
 │   ├── backup/ debug/ maintenance/ testing/
-├── check_stack.sh           # make check
 └── docs/                    # the documentation set (see index below)
 ```
 

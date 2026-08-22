@@ -352,7 +352,7 @@ If reinit fails: check logs (`docker logs db2 --tail 50`), check disk
 
 **1. Run the automated health check:** `make check`
 
-This runs `check_stack.sh`, which validates (see [docs/checks.md](checks.md) for
+This runs `scripts/checks/check_stack.sh`, which validates (see [docs/checks.md](checks.md) for
 the full list): containers, etcd health per member, Patroni API roles,
 split-brain detection, replication lag, Barman status per server, PostgreSQL and
 PgBouncer readiness, HAProxy config, SSH keys/connectivity, and exposed ports.
@@ -499,7 +499,7 @@ Run `make help` for the always-current list. Most-used targets:
 
 | Target | Description |
 |---|---|
-| `make check` | Full health check (`check_stack.sh`) |
+| `make check` | Full health check (`scripts/checks/check_stack.sh`) |
 | `make status` | Cluster status + all access endpoints + recent backups |
 | `make info` | Detailed stack info (`FORMAT=json` optional) |
 | `make leader` | Show current leader node |

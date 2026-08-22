@@ -5,9 +5,9 @@ and what's still on the wish list.
 
 ---
 
-## `make check` (check_stack.sh)
+## `make check` (scripts/checks/check_stack.sh)
 
-`make check` runs [`check_stack.sh`](../check_stack.sh), which prints a
+`make check` runs [`scripts/checks/check_stack.sh`](../scripts/checks/check_stack.sh), which prints a
 ✓ / ✗ / ⚠ report. It is topology-aware: node and etcd lists are derived from
 `PATRONI_REPLICAS` and `ETCD_COUNT` in `.env` (via `scripts/lib/common.sh`), so it
 works for any cluster size.
@@ -108,7 +108,7 @@ drift from the template-generated baseline unnoticed.
 
 ---
 
-## Extending check_stack.sh
+## Extending scripts/checks/check_stack.sh
 
 - The script sources [`scripts/lib/common.sh`](../scripts/lib/common.sh), which
   provides the building blocks for new checks:
