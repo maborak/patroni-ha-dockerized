@@ -515,6 +515,7 @@ Run `make help` for the always-current list. Most-used targets:
 | `make show-backups` | Backup details: `SERVER=dbN BACKUP_ID=<id>` |
 | `make check-archive` | WAL archiving status on the leader |
 | `make dump-db` / `make restore-db` | Logical `.tgz` dump / restore of a single database |
+| `make import-db` | Import an external PostgreSQL DB (`DSN=postgresql://user:pass@host:port/db`), wizard when no DSN given |
 | `make pitr` | PITR wizard (no args = interactive; or `BACKUP_ID= TARGET_TIME='...' SERVER= TARGET= RESTORE=1 AUTO_START=1 WAL_METHOD=`) |
 | `make monitor-recovery` | Monitor recovery progress (`NODE=dbN`) |
 

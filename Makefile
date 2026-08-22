@@ -257,6 +257,16 @@ dump-db: ## Logical .tgz backup of a single DB from a healthy replica (DB=name [
 		$(if $(OUTPUT),--output $(OUTPUT),) \
 		$(if $(filter 1,$(YES)),--yes,)
 
+
+import-db: ## Import an external PostgreSQL DB into the cluster (DSN=postgresql://user:pass@host:port/db [TARGET=name] [JOBS=4] [CLEAN=1] [YES=1]; no DSN = wizard)
+	@bash scripts/backup/restore_database.sh \
+		$(if $(DSN),--from $(DSN),$(if $(SOURCE),--from $(SOURCE),--interactive)) \
+		$(if $(TARGET),--target $(TARGET),) \
+		$(if $(JOBS),--jobs $(JOBS),) \
+		$(if $(filter 1,$(CLEAN)),--clean,) \
+		$(if $(filter 1,$(YES)),--yes,) \
+		$(if $(filter 1,$(DEBUG)),--debug,)
+
 restore-db: ## Restore a DB from .tgz, local or remote (ARCHIVE=path [TARGET=name|URI] [JOBS=8] [CLEAN=1] [NO_OWNER=1] [NO_ACL=1] [YES=1] [DEBUG=1])
 	@bash scripts/backup/restore_database.sh \
 		$(if $(ARCHIVE),--archive $(ARCHIVE),--interactive) \
@@ -319,15 +329,8 @@ analyze: ## Run ANALYZE only (usage: make analyze NODE=db1, or make analyze ALL=
 		$(if $(NODE),--node $(NODE),) \
 		$(if $(filter 1,$(ALL)),--all-nodes,)
 
-pgbadger: ## Generate pgBadger report (usage: make pgbadger NODE=db1)
-	@if [ -n "$(NODE)" ]; then \
-		bash scripts/maintenance/generate_pgbadger_report.sh --node $(NODE); \
-	else \
-		NODE=$$(docker exec db1 patronictl -c /etc/patroni/patroni.yml list 2>/dev/null | grep Leader | awk '{print $$2}'); \
-		if [ -z "$$NODE" ]; then echo "Error: Could not detect leader. Is Patroni running?" >&2; exit 1; fi; \
-		echo "Auto-detected leader: $$NODE"; \
-		bash scripts/maintenance/generate_pgbadger_report.sh --node $$NODE; \
-	fi
+pgbadger: ## Regenerate pgBadger report (usage: make pgbadger)
+	@docker exec pgbadger /usr/local/bin/collect.sh || echo "pgBadger container not running or report generation failed"
 
 # ============================================================================
 # Database Operations

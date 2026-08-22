@@ -215,6 +215,7 @@ sequenceDiagram
 | pgbouncer | 6432 | 6432 | Read-write pool (transaction mode) | `PGBOUNCER_PORT` |
 | pgbouncer-ro | 6433 | 6432 | Read-only pool | `PGBOUNCER_RO_PORT` |
 | barman | 54320 | 5432 | Barman (PostgreSQL protocol) | `BARMAN_PORT` |
+| pgbadger | 8080 | 80 | pgBadger report web UI | `PGBADGER_PORT` |
 
 ### Container-internal ports (inside the Docker network)
 

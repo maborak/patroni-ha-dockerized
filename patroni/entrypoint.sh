@@ -69,6 +69,12 @@ if [ -f /ssh_keys/barman_rsa.pub ]; then
     echo "SSH key added to root authorized_keys"
 fi
 
+# Ensure the shared log directory exists (named volume; JSON logs + archive.log)
+# pgBadger mounts this volume read-write to collect and clean up rotated logs.
+mkdir -p /var/log/postgresql
+chown postgres:postgres /var/log/postgresql
+chmod 700 /var/log/postgresql
+
 # Generate node-specific Patroni config from template
 if [ -f /etc/patroni/patroni.yml.tpl ]; then
     NODE_NAME=$(hostname)

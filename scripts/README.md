@@ -18,7 +18,8 @@ scripts/
 ├── backup/                    # Barman / backup tasks
 │   ├── check_archive_command.sh
 │   ├── dump_database.sh
-│   └── restore_database.sh
+│   ├── restore_database.sh
+│   └── import_database.sh
 ├── pitr/                      # Point-In-Time Recovery workflows
 │   ├── perform_pitr.sh        # ⭐ critical PITR script (also powers `make pitr`)
 │   └── monitor_recovery.sh
@@ -32,9 +33,7 @@ scripts/
 │   ├── pg_stat_statements_query.sh
 │   └── pgmetrics_collect.sh
 ├── maintenance/               # Maintenance tasks
-│   ├── vacuum_optimize.sh
-│   ├── generate_pgbadger_report.sh
-│   └── import_external_database.sh
+│   └── vacuum_optimize.sh
 ├── utils/                     # Helpers
 │   ├── setup_ssh_keys.sh
 │   ├── test_ssh_to_barman.sh
@@ -44,6 +43,7 @@ scripts/
 └── testing/                   # Testing & stress testing
     ├── smoke_test_wizard.sh   # Powers `make smoke-test`
     ├── smoke_test_pitr.sh     # Powers `make smoke-test`
+    ├── smoke_test_import.sh   # Powers `make smoke-test`
     ├── stress_test_db.sh
     ├── stress_test_db.py
     ├── cleanup_stress_test.sh
@@ -108,6 +108,18 @@ Logical `.tgz` backup of a single database from a healthy replica (`make dump-db
 
 Restores a database from a `.tgz` archive produced by `dump_database.sh`, into a local node or a remote target URI (`make restore-db ARCHIVE=path [TARGET=name|URI] [CLEAN=1]`, or interactive).
 
+#### `import_database.sh` — `make import-db`
+
+Imports a database from an external PostgreSQL server into the cluster leader via `pg_dump -Fc` → parallel `pg_restore --jobs` (always `--no-owner --no-acl`). Wizard with source probe (version + size) and full overview when run without arguments; refuses to touch an existing target unless `CLEAN=1`:
+
+```bash
+make import-db DSN='postgresql://dev_user:dev_password@127.0.0.1:5100/maborak'
+make import-db DSN='...' TARGET=app_imported CLEAN=1 KEEP=1   # KEEP stores the dump in ./backups/ for restore-db
+make import-db                                                # wizard
+```
+
+The dump client is the leader container for sources ≤ the cluster's major version, else a one-shot `postgres:<major>` image. `localhost` sources are rewritten to `host.docker.internal` automatically.
+
 ---
 
 ### PITR
@@ -171,17 +183,9 @@ Collects metrics with `pgmetrics`. ⚠️ Requires `pgmetrics` to be installed i
 
 Runs VACUUM/ANALYZE across the cluster: `make vacuum NODE=db1`, `make vacuum ALL=1`, or `make analyze ALL=1` for ANALYZE only.
 
-#### `generate_pgbadger_report.sh` — `make pgbadger`
-
-Generates an HTML pgBadger report from PostgreSQL logs (pgBadger is installed in the barman container). `make pgbadger NODE=db1`; auto-detects leader when `NODE` is omitted.
-
-#### `import_external_database.sh`
-
-Imports an external database dump into the cluster:
-
-```bash
-bash scripts/maintenance/import_external_database.sh /path/to/dump.sql
-```
+> pgBadger reports moved into the dedicated `pgbadger/` container (cron-driven
+> JSON log collection + web UI + source cleanup). Run an on-demand cycle with
+> `make pgbadger`; configure via `PGBADGER_*` in `.env`.
 
 ---
 
@@ -276,7 +280,7 @@ Scripts read these from `.env` (auto-loaded by `lib/common.sh`) or the environme
 | `docker` / `docker-compose` | Most scripts | ✅ Required |
 | `rsync` | `perform_pitr.sh` (remote mode), `restore_database.sh` | ✅ Required for remote PITR |
 | `psycopg2-binary` | `stress_test_db.py` | ✅ Via root `requirements.txt` |
-| `pgbadger` | `generate_pgbadger_report.sh` | ✅ Installed in barman container |
+| `pgbadger` | `pgbadger/` container (make pgbadger) | ✅ Installed in pgbadger container |
 | `python3` | `stress_test_db.py` | ✅ Required |
 | `pg_activity` | `pg_activity_monitor.sh` | ⚠️ Not installed |
 | `pgmetrics` | `pgmetrics_collect.sh` | ⚠️ Not installed |

@@ -170,6 +170,34 @@ grep -q '^PATRONI_DB5_PORT=15435$' "$SANDBOX/.env.example" \
     || fail ".env.example missing PATRONI_DB5_PORT"
 
 # ============================================================================
+# 4b. Assertions — pgbadger service wired to every node's log volume
+# ============================================================================
+grep -q '^  pgbadger:' "$SANDBOX/docker-compose.yml" \
+    && pass "docker-compose.yml defines pgbadger service" \
+    || fail "docker-compose.yml missing pgbadger service"
+
+PGBADGER_MOUNTS=$(grep -cE '^      - db[0-9]+_logs:/logs/db[0-9]+$' "$SANDBOX/docker-compose.yml" || true)
+[ "$PGBADGER_MOUNTS" = "5" ] \
+    && pass "pgbadger mounts all 5 node log volumes" \
+    || fail "pgbadger mounts $PGBADGER_MOUNTS log volumes, expected 5" \
+        "$(grep -nE '_logs:' "$SANDBOX/docker-compose.yml")"
+
+NODE_LOG_MOUNTS=$(grep -cE '^      - db[0-9]+_logs:/var/log/postgresql$' "$SANDBOX/docker-compose.yml" || true)
+[ "$NODE_LOG_MOUNTS" = "5" ] \
+    && pass "all 5 db services mount their log volume" \
+    || fail "$NODE_LOG_MOUNTS db services mount log volumes, expected 5"
+
+grep -q '^  db5_logs:' "$SANDBOX/docker-compose.yml" \
+    && pass "docker-compose.yml declares db5_logs volume" \
+    || fail "docker-compose.yml missing db5_logs volume"
+
+grep -q '^PGBADGER_CRON_EXPRESSION=' "$SANDBOX/.env.example" \
+    && grep -q '^PGBADGER_PORT=8080$' "$SANDBOX/.env.example" \
+    && pass ".env.example carries PGBADGER_* settings" \
+    || fail ".env.example missing PGBADGER_* settings" \
+        "$(grep -n 'PGBADGER' "$SANDBOX/.env.example")"
+
+# ============================================================================
 # 5. Core regression assertion — the env docker compose 'up' received
 # ============================================================================
 if [ -f "$SHIM_LOG" ]; then

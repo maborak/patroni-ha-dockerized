@@ -229,6 +229,7 @@ for i in $(seq 1 $PATRONI_NODES); do
       - \"\${${api_var}}:8001\"
     volumes:
       - db${i}_data:/var/lib/postgresql
+      - db${i}_logs:/var/log/postgresql
       - ./templates/patroni.yml.tpl:/etc/patroni/patroni.yml.tpl:ro
       - ./scripts:/etc/patroni/scripts:ro
       - ./ssh_keys/barman_rsa:/ssh_keys/barman_rsa:ro
@@ -238,7 +239,7 @@ for i in $(seq 1 $PATRONI_NODES); do
 
 ${BLOCK}"
     else
-        DB_SERVICES="${BLOCK}"
+        DB_SERVICES="$BLOCK"
     fi
 done
 
@@ -255,15 +256,22 @@ ${ENTRY}"
     fi
 done
 
-# Build volume declarations
+# Build volume declarations (data + per-node log volumes shared with pgbadger)
 DB_VOLUMES=""
+PGBADGER_LOG_VOLUMES=""
 for i in $(seq 1 $PATRONI_NODES); do
     ENTRY="  db${i}_data:"
+    LOG_VOL_ENTRY="      - db${i}_logs:/logs/db${i}"
     if [ -n "$DB_VOLUMES" ]; then
         DB_VOLUMES="${DB_VOLUMES}
+  db${i}_logs:
 ${ENTRY}"
+        PGBADGER_LOG_VOLUMES="${PGBADGER_LOG_VOLUMES}
+${LOG_VOL_ENTRY}"
     else
-        DB_VOLUMES="${ENTRY}"
+        DB_VOLUMES="${ENTRY}
+  db${i}_logs:"
+        PGBADGER_LOG_VOLUMES="$LOG_VOL_ENTRY"
     fi
 done
 
@@ -271,6 +279,7 @@ done
 printf '%s' "$DB_SERVICES" > /tmp/_gen_db_services.txt
 printf '%s' "$DB_DEPENDS_ON" > /tmp/_gen_db_depends.txt
 printf '%s' "$DB_VOLUMES" > /tmp/_gen_db_volumes.txt
+printf '%s' "$PGBADGER_LOG_VOLUMES" > /tmp/_gen_pgbadger_vols.txt
 printf '%s' "$ETCD_SERVICES" > /tmp/_gen_etcd_services.txt
 printf '%s' "$ETCD_DEPENDS" > /tmp/_gen_etcd_depends.txt
 printf '%s' "$ETCD_VOLUMES" > /tmp/_gen_etcd_volumes.txt
@@ -284,6 +293,8 @@ with open('/tmp/_gen_db_depends.txt', 'r') as f:
     db_depends = f.read()
 with open('/tmp/_gen_db_volumes.txt', 'r') as f:
     db_volumes = f.read()
+with open('/tmp/_gen_pgbadger_vols.txt', 'r') as f:
+    pgbadger_vols = f.read()
 with open('/tmp/_gen_etcd_services.txt', 'r') as f:
     etcd_services = f.read()
 with open('/tmp/_gen_etcd_depends.txt', 'r') as f:
@@ -296,10 +307,11 @@ content = content.replace('__ETCD_VOLUMES__', etcd_volumes)
 content = content.replace('__DB_SERVICES__', db_services)
 content = content.replace('__DB_DEPENDS_ON_HEALTHY__', db_depends)
 content = content.replace('__DB_VOLUMES__', db_volumes)
+content = content.replace('__PGBADGER_LOG_VOLUMES__', pgbadger_vols)
 with open('${PROJECT_ROOT}/docker-compose.yml', 'w') as f:
     f.write(content)
 PYEOF
-rm -f /tmp/_gen_db_services.txt /tmp/_gen_db_depends.txt /tmp/_gen_db_volumes.txt /tmp/_gen_etcd_services.txt /tmp/_gen_etcd_depends.txt /tmp/_gen_etcd_volumes.txt
+rm -f /tmp/_gen_db_services.txt /tmp/_gen_db_depends.txt /tmp/_gen_db_volumes.txt /tmp/_gen_pgbadger_vols.txt /tmp/_gen_etcd_services.txt /tmp/_gen_etcd_depends.txt /tmp/_gen_etcd_volumes.txt
 
 # --- Generate .env.example port entries ---
 ETCD_PORT_ENTRIES=""

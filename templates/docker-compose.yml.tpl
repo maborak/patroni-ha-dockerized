@@ -62,7 +62,6 @@ __DB_SERVICES__
       - "${BARMAN_PORT}:5432"
     volumes:
       - barman_data:/var/lib/barman
-      - ./reports:/var/lib/barman/pgbadger-reports
       - barman_backup:/data/pg-backup
       - ./configs/barman.conf:/etc/barman.conf:ro
       - ./ssh_keys/barman_rsa:/ssh_keys/barman_rsa:ro
@@ -152,6 +151,37 @@ __DB_DEPENDS_ON_HEALTHY__
       start_period: 10s
     restart: unless-stopped
 
+  # pgBadger log analytics: cron-driven collection from all DB nodes,
+  # JSON log parsing, source cleanup, and a built-in web UI for reports.
+  pgbadger:
+    build:
+      context: ./pgbadger
+      dockerfile: Dockerfile
+    container_name: pgbadger
+    hostname: pgbadger
+    environment:
+      - PGBADGER_CRON_EXPRESSION=${PGBADGER_CRON_EXPRESSION:-*/30 * * * *}
+      - PGBADGER_TZ=${PGBADGER_TZ:-UTC}
+      - PGBADGER_RETENTION_DAYS=${PGBADGER_RETENTION_DAYS:-7}
+      - PGBADGER_JOBS=${PGBADGER_JOBS:-4}
+      - PGBADGER_SAFETY_MINUTES=${PGBADGER_SAFETY_MINUTES:-10}
+      - PGBADGER_TITLE=${PATRONI_CLUSTER_NAME:-patroni1} pgBadger report
+    ports:
+      - "${PGBADGER_PORT:-8080}:80"
+    volumes:
+      - pgbadger_raw:/var/lib/pgbadger/raw
+      - pgbadger_reports:/var/lib/pgbadger/reports
+__PGBADGER_LOG_VOLUMES__
+    networks:
+      - patroni_network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:80/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
 networks:
   patroni_network:
     driver: bridge
@@ -164,3 +194,5 @@ __ETCD_VOLUMES__
 __DB_VOLUMES__
   barman_data:
   barman_backup:
+  pgbadger_raw:
+  pgbadger_reports:

@@ -51,6 +51,7 @@ A production-grade, single-command **PostgreSQL High-Availability lab and toolbo
 | **Routing** | HAProxy: `:5551` writes → current leader, `:5552` reads → replicas (health-checked via the Patroni API) |
 | **Pooling** | 2× PgBouncer in transaction mode: `:6432` read-write, `:6433` read-only |
 | **Backups** | Barman with per-node WAL archiving, retention policy, parallel jobs, bandwidth limits |
+| **Log analytics** | pgBadger container: cron-driven JSON log collection from all nodes, source cleanup after verified pull, retention, and a built-in web UI (`:8080`) |
 | **PITR** | Interactive recovery wizard: pick backup → target node → WAL method → target time → done |
 | **DR** | Cross-cluster switchover runbooks + scripts to promote a remote standby cluster and back |
 | **Ops toolbox** | ~45 `make` targets: health checks, switchover/failover, replica reinit, vacuum, pgBadger, dumps, stress tests |
@@ -140,6 +141,7 @@ Full details: [docs/architecture.md](docs/architecture.md).
 | HAProxy | `5551` / `5552` / `5553` | write / read / stats page (auth required) |
 | PgBouncer | `6432` / `6433` | pooled rw / pooled ro |
 | Barman | `54320` | backup server API |
+| pgBadger | `8080` | web UI for generated log-analysis reports |
 | etcd | `2379`, `22379`, `32379` | DCS client ports (peers `+1`) |
 | PostgreSQL nodes | `15431…1543N` | direct node access (bypasses failover) |
 | Patroni API | `8001…800N` | per-node REST API |
@@ -159,6 +161,10 @@ Everything lives in **`.env`** (copy from `.env.example`). Key variables:
 | `HAPROXY_*_PORT`, `PGBOUNCER_*_PORT`, `BARMAN_PORT` | see above | Host port mappings |
 | `PG_SHARED_BUFFERS`, `PG_MAX_CONNECTIONS`, … | tuned defaults | PostgreSQL tuning, applied at bootstrap |
 | `BARMAN_RETENTION_POLICY` | `RECOVERY WINDOW OF 7 DAYS` | Backup retention |
+| `PGBADGER_CRON_EXPRESSION` | `*/30 * * * *` | pgBadger collection schedule (see `.env` examples) |
+| `PGBADGER_PORT` | `8080` | pgBadger web UI port |
+| `PGBADGER_RETENTION_DAYS` | `7` | Days of raw JSON logs kept for re-parsing |
+| `PGBADGER_SAFETY_MINUTES` | `10` | Only pull log files untouched for ≥ N minutes |
 | `REMOTE_*`, `MAC_VPN_HOST` | placeholders | Cross-cluster DR section — see [docs/switchover.md](docs/switchover.md) |
 
 Scaling is an `.env` edit away:
@@ -182,7 +188,7 @@ make up        # new nodes join as replicas and sync automatically
 | Rebuild a replica | `make reinit NODE=db2` |
 | Logs / shells | `make logs` / `make shell NODE=db1` |
 | Disk usage | `make disk` |
-| Vacuum / analyze / pgBadger | `make vacuum ALL=1` / `make analyze` / `make pgbadger` |
+| Vacuum / analyze / pgBadger | `make vacuum ALL=1` / `make analyze` / `make pgbadger` (UI at `http://localhost:8080/`) |
 | Stop / restart / destroy | `make down` / `make restart` / `make destroy` (types `DESTROY`) |
 
 Run `make help` for the full list (~45 targets).
@@ -194,6 +200,7 @@ make backup                        # Barman base backup of the leader
 make list-backups                  # list backups per server
 make show-backups SERVER=db2 BACKUP_ID=20260821T120000
 make check-archive                 # WAL archiving health
+make import-db DSN='postgresql://user:pass@host:port/db'   # import an external DB (wizard if no DSN)
 ```
 
 Point-in-time recovery is wizard-driven:
@@ -222,6 +229,21 @@ bash scripts/pitr/perform_pitr.sh 20260821T120000 latest \
 ```
 
 Guides: [docs/pitr.md](docs/pitr.md) · [docs/tools/perform_pitr.md](docs/tools/perform_pitr.md) · [docs/runbooks.md](docs/runbooks.md)
+
+## Log analytics (pgBadger)
+
+All nodes log in **JSON format** (`jsonlog` — configured at bootstrap). A dedicated `pgbadger` container:
+
+1. **Collects** rotated JSON logs from every node on a cron schedule (`PGBADGER_CRON_EXPRESSION`, default every 30 min)
+2. **Verifies** each copy byte-for-byte, then **deletes the source file** on the DB node — nodes never accumulate logs
+3. **Re-parses** the full retained window (`PGBADGER_RETENTION_DAYS`, default 7) into a cluster-wide report
+4. **Serves** the report at `http://localhost:8080/`
+
+```bash
+make pgbadger   # on-demand collection cycle + UI URL
+```
+
+Only files untouched for `PGBADGER_SAFETY_MINUTES` (default 10) are eligible, so a log the collector still has open is never pulled or deleted.
 
 ## Disaster recovery (remote standby)
 
@@ -274,6 +296,7 @@ More: [docs/runbooks.md](docs/runbooks.md#troubleshooting) · [docs/checks.md](d
 ├── templates/               # config templates (rendered by make generate / entrypoint)
 ├── patroni/                 # Patroni node image (entrypoint renders per-node config)
 ├── barman/                  # Barman image + supervisord
+├── pgbadger/                # pgBadger image (cron collection + web UI)
 ├── remote-standby/          # standby-cluster Patroni template + Arch Linux PG15 build guide
 ├── scripts/
 │   ├── utils/wizard.sh      # interactive setup wizard (make wizard)

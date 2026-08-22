@@ -49,40 +49,49 @@ trap on_sigint INT
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") [--archive PATH] [--target NAME|URI] [--node dbN] [--jobs N] [--clean] [--no-owner] [--no-acl] [--interactive] [--yes] [--debug]
+Usage: $(basename "$0") [--from PATH|URI | --archive PATH] [--target NAME|URI] [options]
+       $(basename "$0") --interactive
 
-Restore a single database from a .tgz produced by dump_database.sh.
-Restores to the local Patroni leader, or to a remote host when --target is a libpq URI.
+Restore a database into the local Patroni leader (default) or a remote host,
+from any of these source types (--from / --archive):
+  FILE.tgz      archive produced by make dump-db (pg_dump -Fd, tarred)
+  FILE.dump     custom-format pg_dump archive (e.g. kept by a live import)
+  DIRECTORY     an unpacked pg_dump -Fd directory
+  postgresql:// live source database — dumped on the fly (pg_dump -Fd), then
+                restored through the same pipeline (probe, progress, resume)
 
 Options:
-  --archive PATH      Path to .tgz archive (required unless --interactive)
-  --target NAME|URI   Target DB name (local) OR libpq URI (postgresql://...) for remote restore
-  --node dbN          Local: force destination node (default: cluster leader)
-                      Remote: force client container (default: first running db*)
-  --jobs N            pg_restore parallel jobs (default: 4)
-  --clean             Drop the target database first if it exists
-  --no-owner          pg_restore --no-owner (skip ownership restoration)
-  --no-acl            pg_restore --no-acl (skip GRANT/REVOKE restoration)
-  --interactive       Pick archive from ./backups/ via numbered menu
-  --yes               Skip the Start/Cancel confirmation (use with care)
-  --debug             Print every psql/pg_restore command before running it (passwords masked)
-  -h, --help          Show this help
+  --from SRC         Source: .tgz file, .dump file, directory, or postgresql:// URI
+                     (alias: --archive; make restore-db FROM=… / DSN=… / ARCHIVE=…)
+  --target NAME|URI  Target DB name (local cluster, default) OR libpq URI (remote restore)
+  --node dbN         Local: force destination node (default: cluster leader)
+                       Remote: force client container (default: first running db*)
+  --jobs N           pg_restore parallel jobs (default: 4)
+  --clean            Drop the target database first if it exists
+  --no-owner         pg_restore --no-owner (skip ownership restoration)
+  --no-acl           pg_restore --no-acl (skip GRANT/REVOKE restoration)
+  --interactive      Wizard: pick source (files, path, or live URI) and target
+  --yes              Skip the Start/Cancel confirmation (use with care)
+  --debug            Print every psql/pg_restore command before running it (passwords masked)
+  -h, --help         Show this help
 
 Examples:
-  # Local restore into the cluster leader
+  # From a dump-db archive into the cluster leader
   $(basename "$0") --archive backups/pazuzu_20260515_204914.tgz
-  $(basename "$0") --archive backups/pazuzu_20260515_204914.tgz --target pazuzu_copy
-  $(basename "$0") --interactive --clean
-
-  # Remote restore (--target is a libpq URI)
-  $(basename "$0") --archive backups/pazuzu_20260515_204914.tgz \\
-      --target postgresql://postgres:secret@localhost:5432/maborak --clean
+  $(basename "$0") --archive backups/x.tgz --target mydb_copy
+  # From a LIVE external database into the cluster (was make import-db)
+  $(basename "$0") --from postgresql://dev:secret@127.0.0.1:5100/maborak
+  $(basename "$0") --from postgresql://dev:secret@db.example.com:5432/app --target app_imported --clean
+  # Into a remote host instead of the cluster
+  $(basename "$0") --archive backups/x.tgz --target postgresql://postgres:secret@localhost:5432/maborak --clean
+  # Wizard (pick source + target interactively)
+  $(basename "$0") --interactive
 EOF
 }
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --archive) ARCHIVE="$2"; shift 2 ;;
+        --archive|--from|--source) ARCHIVE="$2"; shift 2 ;;
         --target) TARGET="$2"; shift 2 ;;
         --node) NODE="$2"; shift 2 ;;
         --jobs) JOBS="$2"; shift 2 ;;
@@ -305,6 +314,104 @@ run_traced() {
     "$@"
 }
 
+# --- Interactive source + target wizard ----------------------------------------
+# Runs BEFORE target-URI detection so a URI chosen here flows into the normal
+# TARGET parsing below. SOURCE_URI holds a live postgresql:// source.
+SOURCE_URI=""
+wizard_pick_source() {
+    BACKUP_DIR="$PROJECT_ROOT/backups"
+    if [[ "$ARCHIVE" =~ ^postgres(ql)?:// ]]; then
+        SOURCE_URI="$ARCHIVE"; ARCHIVE=""; return 0
+    fi
+    [ "$INTERACTIVE" = true ] || [ -n "$ARCHIVE" ] && return 0
+
+    echo "" >&2
+    echo -e "${BLUE}${BOLD}Restore wizard — choose a source${NC}" >&2
+    if [ -d "$BACKUP_DIR" ]; then
+        ARCHIVES=()
+        while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            ARCHIVES+=("$f")
+        done < <(ls -1t "$BACKUP_DIR"/*.tgz "$BACKUP_DIR"/*.dump 2>/dev/null || true)
+    else
+        ARCHIVES=()
+        echo -e "${YELLOW}  (no $BACKUP_DIR directory yet)${NC}" >&2
+    fi
+
+    if [ ${#ARCHIVES[@]} -gt 0 ]; then
+        echo -e "${BLUE}Archives in ./backups (newest first):${NC}" >&2
+        for idx in "${!ARCHIVES[@]}"; do
+            f="${ARCHIVES[$idx]}"
+            size=$(du -h "$f" | awk '{print $1}')
+            printf "  ${CYAN}%2d)${NC} %s  (%s)\n" "$((idx + 1))" "$(basename "$f")" "$size" >&2
+        done
+    fi
+    echo "" >&2
+    echo "  u)  live database URI (dump + restore on the fly)" >&2
+    echo "  p)  path to a .tgz / .dump file or -Fd directory" >&2
+    echo "" >&2
+
+    local prompt="Source"
+    [ ${#ARCHIVES[@]} -gt 0 ] && prompt="Source [1-${#ARCHIVES[@]}], u, or p"
+    echo -ne "${BOLD}${prompt}: ${NC}" >&2
+    local choice; IFS= read -r choice || choice=""
+    if [[ "$choice" =~ ^[0-9]+$ ]] && [ ${#ARCHIVES[@]} -gt 0 ] \
+        && [ "$choice" -ge 1 ] && [ "$choice" -le "${#ARCHIVES[@]}" ]; then
+        ARCHIVE="${ARCHIVES[$((choice - 1))]}"
+        echo -e "${GREEN}✓ Selected: $(basename "$ARCHIVE")${NC}" >&2
+    elif [ "$choice" = "u" ] || [ "$choice" = "U" ]; then
+        while :; do
+            echo -ne "${BOLD}Source URI (postgresql://user:pass@host:port/db): ${NC}" >&2
+            IFS= read -r SOURCE_URI || { echo -e "${YELLOW}Input closed — aborting, nothing was changed.${NC}" >&2; exit 0; }
+            [[ "$SOURCE_URI" =~ ^postgres(ql)?:// ]] && break
+            echo -e "${RED}Invalid URI. Expected postgresql://user[:pass]@host[:port]/db${NC}" >&2
+        done
+    elif [ "$choice" = "p" ] || [ "$choice" = "P" ]; then
+        while :; do
+            echo -ne "${BOLD}Path to .tgz / .dump / directory: ${NC}" >&2
+            IFS= read -r ARCHIVE || { echo -e "${YELLOW}Input closed — aborting, nothing was changed.${NC}" >&2; exit 0; }
+            [ -e "$ARCHIVE" ] && break
+            echo -e "${RED}No such file or directory: $ARCHIVE${NC}" >&2
+        done
+    else
+        echo -e "${RED}✗ Invalid choice.${NC}" >&2
+        exit 1
+    fi
+}
+
+wizard_pick_target() {
+    [ "$INTERACTIVE" = true ] || return 0
+    local def=""
+    if [ -n "$SOURCE_URI" ]; then
+        def="$(parse_pg_uri_quiet_db "$SOURCE_URI")"
+    elif [ -n "$ARCHIVE" ]; then
+        local base
+        base=$(basename "$ARCHIVE"); base="${base%.tgz}"; base="${base%.dump}"
+        def=$(echo "$base" | sed -E 's/_[0-9]{8}_[0-9]{6}$//')
+    fi
+    echo "" >&2
+    echo -e "${BLUE}Target — press Enter for the local cluster leader${NC}" >&2
+    echo -e "  Enter a database NAME (restore into the local HA cluster), or" >&2
+    echo -e "  a full postgresql://user:pass@host:port/db URI (restore into a remote host)." >&2
+    echo -ne "${BOLD}Target [${def:-database name}]: ${NC}" >&2
+    local ans; IFS= read -r ans || ans=""
+    [ -n "$ans" ] && TARGET="$ans"
+    [ -z "$TARGET" ] && TARGET="$def"
+    echo "" >&2
+}
+
+# parse_pg_uri_quiet_db: extract just the database name from a URI (no globals)
+parse_pg_uri_quiet_db() {
+    local rest="${1#*://}" main="${rest%%\?*}" hostpart="$main"
+    [[ "$main" == *@* ]] && hostpart="${main##*@}"
+    local db="${hostpart##*/}"
+    [ "$db" = "$hostpart" ] && db=""
+    printf '%s' "$db"
+}
+
+wizard_pick_source
+wizard_pick_target
+
 if [[ "$TARGET" =~ ^postgres(ql)?:// ]]; then
     REMOTE_MODE=true
     REMOTE_DSN="$TARGET"
@@ -361,59 +468,71 @@ if [ "$REMOTE_MODE" = true ]; then
     fi
 fi
 
-# --- Interactive archive picker -----------------------------------------------
-if [ "$INTERACTIVE" = true ] || [ -z "$ARCHIVE" ]; then
-    BACKUP_DIR="$PROJECT_ROOT/backups"
-    if [ ! -d "$BACKUP_DIR" ]; then
-        echo -e "${RED}✗ No backups directory found at $BACKUP_DIR${NC}" >&2
-        exit 1
-    fi
 
-    ARCHIVES=()
-    while IFS= read -r f; do
-        [ -z "$f" ] && continue
-        ARCHIVES+=("$f")
-    done < <(ls -1t "$BACKUP_DIR"/*.tgz 2>/dev/null || true)
-
-    if [ ${#ARCHIVES[@]} -eq 0 ]; then
-        echo -e "${RED}✗ No .tgz archives found in $BACKUP_DIR${NC}" >&2
-        exit 1
-    fi
-
-    echo "" >&2
-    echo -e "${BLUE}${BOLD}Available archives (newest first):${NC}" >&2
-    for idx in "${!ARCHIVES[@]}"; do
-        f="${ARCHIVES[$idx]}"
-        size=$(du -h "$f" | awk '{print $1}')
-        printf "  ${CYAN}%2d)${NC} %s  (%s)\n" "$((idx + 1))" "$(basename "$f")" "$size" >&2
-    done
-    echo "" >&2
-
-    echo -ne "${BOLD}Select archive [1-${#ARCHIVES[@]}]: ${NC}" >&2
-    read -r choice
-    if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#ARCHIVES[@]}" ]; then
-        echo -e "${RED}✗ Invalid choice.${NC}" >&2
-        exit 1
-    fi
-    ARCHIVE="${ARCHIVES[$((choice - 1))]}"
-    echo -e "${GREEN}✓ Selected: $(basename "$ARCHIVE")${NC}" >&2
+# --- Live-source (URI) parsing ------------------------------------------------
+# SOURCE_URI was set by --from or the wizard. Parse into SRC_* globals.
+# (parse_pg_uri fills PG_*; we stash them into SRC_* and reset, because PG_*
+# is reserved for the REMOTE TARGET for the rest of the script.)
+if [ -n "$SOURCE_URI" ]; then
+    parse_pg_uri "$SOURCE_URI" || exit 1
+    [ -z "$PG_DBNAME" ] && { echo -e "${RED}✗ Source URI must include a database name${NC}" >&2; exit 1; }
+    [ -z "$PG_USER" ]   && { echo -e "${RED}✗ Source URI must include a user${NC}" >&2; exit 1; }
+    [ -z "$PG_PASSWORD" ] && {
+        printf "Password for %s@%s: " "$PG_USER" "$PG_HOST"
+        IFS= read -rs PG_PASSWORD </dev/tty || { echo; exit 1; }
+        echo ""
+        SOURCE_URI="postgresql://${PG_USER}:${PG_PASSWORD}@${PG_HOST}:${PG_PORT}/${PG_DBNAME}"
+    }
+    SRC_DSN="$SOURCE_URI"
+    SRC_USER="$PG_USER"; SRC_PASSWORD="$PG_PASSWORD"; SRC_HOST="$PG_HOST"
+    SRC_PORT="$PG_PORT"; SRC_DBNAME="$PG_DBNAME"
+    PG_USER=""; PG_PASSWORD=""; PG_HOST=""; PG_PORT=""; PG_DBNAME=""
 fi
 
-# Resolve to absolute path
-if [ ! -f "$ARCHIVE" ]; then
-    echo -e "${RED}✗ Archive not found: $ARCHIVE${NC}" >&2
-    exit 1
+# --- Source resolution (skip for live URIs) ------------------------------------
+CUSTOM_FORMAT=false    # true → ARCHIVE is a single custom-format .dump file
+if [ -n "$SOURCE_URI" ]; then
+    : # live source — dumped later, just before restore
+elif [ -d "$ARCHIVE" ]; then
+    # unpacked pg_dump -Fd directory given directly
+    if [ ! -f "$ARCHIVE/toc.dat" ]; then
+        echo -e "${RED}✗ Directory $ARCHIVE does not look like a pg_dump -Fd archive (no toc.dat).${NC}" >&2
+        exit 1
+    fi
+    ARCHIVE="$(cd "$ARCHIVE" && pwd)"
+else
+    if [ ! -f "$ARCHIVE" ]; then
+        echo -e "${RED}✗ Source not found: $ARCHIVE${NC}" >&2
+        exit 1
+    fi
+    case "$ARCHIVE" in
+        *.dump|*.pgdump) CUSTOM_FORMAT=true ;;
+        *.tgz) : ;;
+        *)
+            # Sniff the magic header rather than trusting the extension
+            if head -c 5 "$ARCHIVE" | grep -q '^PGDMP'; then
+                CUSTOM_FORMAT=true
+            else
+                echo -e "${YELLOW}⚠ Unrecognized source extension: $ARCHIVE — assuming .tgz (tar of a -Fd directory).${NC}" >&2
+            fi
+            ;;
+    esac
+    ARCHIVE="$(cd "$(dirname "$ARCHIVE")" && pwd)/$(basename "$ARCHIVE")"
 fi
-ARCHIVE="$(cd "$(dirname "$ARCHIVE")" && pwd)/$(basename "$ARCHIVE")"
 
 # --- Determine target DB name -------------------------------------------------
 if [ -z "$TARGET" ]; then
-    BASE=$(basename "$ARCHIVE" .tgz)
-    # Strip trailing _YYYYmmdd_HHMMSS if present
-    TARGET=$(echo "$BASE" | sed -E 's/_[0-9]{8}_[0-9]{6}$//')
-    if [ -z "$TARGET" ] || [ "$TARGET" = "$BASE" ] && ! [[ "$BASE" =~ _[0-9]{8}_[0-9]{6}$ ]]; then
-        echo -e "${YELLOW}⚠ Could not parse DB name from filename; using full basename: $BASE${NC}" >&2
-        TARGET="$BASE"
+    if [ -n "$SOURCE_URI" ]; then
+        TARGET="$SRC_DBNAME"
+    else
+        BASE=$(basename "$ARCHIVE" .tgz)
+        BASE="${BASE%.dump}"
+        # Strip trailing _YYYYmmdd_HHMMSS if present
+        TARGET=$(echo "$BASE" | sed -E 's/_[0-9]{8}_[0-9]{6}$//')
+        if [ -z "$TARGET" ] || [ "$TARGET" = "$BASE" ] && ! [[ "$BASE" =~ _[0-9]{8}_[0-9]{6}$ ]]; then
+            echo -e "${YELLOW}⚠ Could not parse DB name from filename; using full basename: $BASE${NC}" >&2
+            TARGET="$BASE"
+        fi
     fi
 fi
 
@@ -886,25 +1005,123 @@ if [ "$ASSUME_YES" = false ]; then
 fi
 
 # --- Prepare paths ------------------------------------------------------------
-ARCHIVE_BASE=$(basename "$ARCHIVE")
+# Stages (steps 1-2 of 5) produce EXTRACT_PATH: a pg_dump input the restore
+# client can read — an unpacked -Fd directory OR a custom-format file.
+#   .tgz      → copy + tar -xzf (original flow)
+#   .dump     → copy only (CUSTOM_FORMAT)
+#   directory → copy only (already -Fd)
+#   live URI  → pg_dump -Fd on the fly (dump_from_live_uri), then copy
+ARCHIVE_BASE="live_$(printf '%s' "${SRC_DBNAME:-db}" | tr -c 'A-Za-z0-9_.-' '_')"
+[ -n "$ARCHIVE" ] && ARCHIVE_BASE=$(basename "$ARCHIVE")
 DUMP_DIR_NAME="${ARCHIVE_BASE%.tgz}"
+DUMP_DIR_NAME="${DUMP_DIR_NAME%.dump}"
 
-if [ "$REMOTE_MODE" = true ] && [ "$CLIENT_MODE" = "host" ]; then
+# dump_from_live_uri: probe the source, then pg_dump -Fd into a HOST directory.
+# Uses the leader / first running db container as the dump client; falls back
+# to a one-shot postgres:<major> image when the source is NEWER than the cluster.
+dump_from_live_uri() {
+    local host_for_client="$SRC_HOST"
+    case "$SRC_HOST" in localhost|127.0.0.1|::1)
+        echo -e "${YELLOW}NOTE: source host '$SRC_HOST' rewritten to host.docker.internal for the container client${NC}" >&2
+        host_for_client="host.docker.internal" ;;
+    esac
+    local dsn="postgresql://${SRC_USER}:${SRC_PASSWORD}@${host_for_client}:${SRC_PORT}/${SRC_DBNAME}"
+
+    local client=""
+    client=$(detect_leader 2>/dev/null || true)
+    [ -z "$client" ] && for n in $(get_db_nodes); do
+        docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${n}$" && { client="$n"; break; }
+    done
+
+    echo -e "${YELLOW}[0/5] Probing live source ${SRC_USER}@${host_for_client}:${SRC_PORT}/${SRC_DBNAME}...${NC}" >&2
+    local src_version="" src_size=""
+    if [ -n "$client" ]; then
+        src_version=$(docker exec -e PGPASSWORD="$SRC_PASSWORD" "$client" \
+            psql "$dsn" -tAc "SHOW server_version" 2>/dev/null | head -1)
+        [ -n "$src_version" ] && src_size=$(docker exec -e PGPASSWORD="$SRC_PASSWORD" "$client" \
+            psql "$dsn" -tAc "SELECT pg_size_pretty(pg_database_size(current_database()))" 2>/dev/null | head -1)
+    fi
+    if [ -z "$src_version" ]; then
+        echo -e "${RED}✗ Could not connect to the live source.${NC}" >&2
+        echo -e "${YELLOW}  Check the URI, credentials, and reachability from Docker.${NC}" >&2
+        exit 1
+    fi
+    echo -e "${GREEN}✓ Source reachable: PostgreSQL $src_version${src_size:+ ($src_size)}${NC}" >&2
+
+    LIVE_DUMP_HOST="$(mktemp -d "${TMPDIR:-/tmp}/restore_live_${SRC_DBNAME}.XXXXXX")"
+    local src_major="${src_version%%.*}"
+
+    if [ -n "$client" ] && [ "${src_major:-0}" -le "$(get_patroni_pg_version 2>/dev/null || echo 0)" ] 2>/dev/null; then
+        echo -e "${YELLOW}[1/5] Dumping live source with pg_dump -Fd (client: $client)...${NC}" >&2
+        trace_cmd docker exec -e PGPASSWORD="****" "$client" pg_dump -Fd -f "/tmp/live_dump_$$" "$dsn"
+        docker exec -e PGPASSWORD="$SRC_PASSWORD" "$client" \
+            pg_dump -Fd -f "/tmp/live_dump_$$" "$dsn" || { echo -e "${RED}✗ pg_dump failed.${NC}" >&2; exit 1; }
+        docker cp "$client:/tmp/live_dump_$$/." "$LIVE_DUMP_HOST/" || { echo -e "${RED}✗ Could not copy dump from $client.${NC}" >&2; exit 1; }
+        docker exec "$client" rm -rf "/tmp/live_dump_$$"
+    else
+        echo -e "${YELLOW}[1/5] Dumping live source with pg_dump -Fd (postgres:${src_major} image — source newer than cluster)...${NC}" >&2
+        trace_cmd docker run --rm -v "$LIVE_DUMP_HOST":/out -e PGPASSWORD="****" "postgres:$src_major" \
+            pg_dump -Fd -f /out "$dsn"
+        docker run --rm -v "$LIVE_DUMP_HOST":/out -e PGPASSWORD="$SRC_PASSWORD" "postgres:$src_major" \
+            pg_dump -Fd -f /out "$dsn" || { echo -e "${RED}✗ pg_dump failed.${NC}" >&2; exit 1; }
+    fi
+    [ -f "$LIVE_DUMP_HOST/toc.dat" ] || { echo -e "${RED}✗ Dump directory is missing toc.dat — aborting.${NC}" >&2; exit 1; }
+    echo -e "${GREEN}✓ Live dump complete ($(du -sh "$LIVE_DUMP_HOST" | awk '{print $1}'))${NC}" >&2
+}
+
+cleanup_live_dump() { [ -n "${LIVE_DUMP_HOST:-}" ] && rm -rf "$LIVE_DUMP_HOST" 2>/dev/null || true; }
+
+if [ -n "$SOURCE_URI" ]; then
+    dump_from_live_uri
+    if [ "$REMOTE_MODE" = true ] && [ "$CLIENT_MODE" = "host" ]; then
+        # host-mode remote target: restore reads the dump right on the host
+        EXTRACT_PATH="$LIVE_DUMP_HOST"
+        cleanup() { cleanup_live_dump; }
+    else
+        # local target or docker-client remote: stage the dump inside the client container
+        CONTAINER_DIR="/tmp/${DUMP_DIR_NAME}"
+        docker exec "$NODE" rm -rf "$CONTAINER_DIR" 2>/dev/null || true
+        docker cp "$LIVE_DUMP_HOST" "$NODE:$CONTAINER_DIR" || { echo -e "${RED}✗ Could not stage live dump into $NODE.${NC}" >&2; exit 1; }
+        EXTRACT_PATH="$CONTAINER_DIR"
+        cleanup() { cleanup_live_dump; docker exec "$NODE" rm -rf "$CONTAINER_DIR" 2>/dev/null || true; }
+    fi
+    trap cleanup EXIT
+    echo -e "${YELLOW}[2/5] (skipped — live source dumped straight to -Fd directory)${NC}" >&2
+elif [ "$CUSTOM_FORMAT" = true ]; then
+    if [ "$REMOTE_MODE" = true ] && [ "$CLIENT_MODE" = "host" ]; then
+        EXTRACT_PATH="$ARCHIVE"
+        cleanup() { :; }
+    else
+        CONTAINER_DUMP="/tmp/${ARCHIVE_BASE}"
+        echo -e "${YELLOW}[1/5] Copying custom-format dump into ${NODE}...${NC}" >&2
+        run_traced docker cp "$ARCHIVE" "$NODE:$CONTAINER_DUMP"
+        echo -e "${GREEN}✓ Copied${NC}" >&2
+        EXTRACT_PATH="$CONTAINER_DUMP"
+        cleanup() { docker exec "$NODE" rm -rf "$CONTAINER_DUMP" 2>/dev/null || true; }
+    fi
+    trap cleanup EXIT
+    echo -e "${YELLOW}[2/5] (skipped — custom-format file needs no extraction)${NC}" >&2
+elif [ -d "$ARCHIVE" ]; then
+    if [ "$REMOTE_MODE" = true ] && [ "$CLIENT_MODE" = "host" ]; then
+        EXTRACT_PATH="$ARCHIVE"
+        cleanup() { :; }
+    else
+        CONTAINER_DIR="/tmp/${DUMP_DIR_NAME}"
+        echo -e "${YELLOW}[1/5] Copying -Fd directory into ${NODE}...${NC}" >&2
+        run_traced docker cp "$ARCHIVE" "$NODE:$CONTAINER_DIR"
+        echo -e "${GREEN}✓ Copied${NC}" >&2
+        EXTRACT_PATH="$CONTAINER_DIR"
+        cleanup() { docker exec "$NODE" rm -rf "$CONTAINER_DIR" 2>/dev/null || true; }
+    fi
+    trap cleanup EXIT
+    echo -e "${YELLOW}[2/5] (skipped — directory is already unpacked)${NC}" >&2
+elif [ "$REMOTE_MODE" = true ] && [ "$CLIENT_MODE" = "host" ]; then
     # Extract directly on the host — no docker cp needed
     EXTRACT_BASE="/tmp"
     EXTRACT_PATH="${EXTRACT_BASE}/${DUMP_DIR_NAME}"
     cleanup() { rm -rf "$EXTRACT_PATH" 2>/dev/null || true; }
-else
-    # Extract inside the container
-    CONTAINER_TGZ="/tmp/${ARCHIVE_BASE}"
-    EXTRACT_PATH="/tmp/${DUMP_DIR_NAME}"
-    cleanup() { docker exec "$NODE" rm -rf "$CONTAINER_TGZ" "$EXTRACT_PATH" 2>/dev/null || true; }
-fi
-trap cleanup EXIT
+    trap cleanup EXIT
 
-START_TS=$(date +%s)
-
-if [ "$REMOTE_MODE" = true ] && [ "$CLIENT_MODE" = "host" ]; then
     echo -e "${YELLOW}[1/5] Extracting archive on host (${EXTRACT_BASE})...${NC}"
     run_traced tar -xzf "$ARCHIVE" -C "$EXTRACT_BASE"
     if [ ! -f "$EXTRACT_PATH/toc.dat" ]; then
@@ -912,13 +1129,19 @@ if [ "$REMOTE_MODE" = true ] && [ "$CLIENT_MODE" = "host" ]; then
         exit 1
     fi
     echo -e "${GREEN}✓ Extracted${NC}"
-    echo -e "${YELLOW}[2/5] (skipped — host extraction did both copy + extract)${NC}"
+    echo -e "${YELLOW}[2/5] (skipped — host extraction did both copy + extract)${NC}" >&2
 else
-    echo -e "${YELLOW}[1/5] Copying archive into ${NODE}...${NC}"
-    run_traced docker cp "$ARCHIVE" "$NODE:$CONTAINER_TGZ"
-    echo -e "${GREEN}✓ Copied${NC}"
+    # Extract inside the container
+    CONTAINER_TGZ="/tmp/${ARCHIVE_BASE}"
+    EXTRACT_PATH="/tmp/${DUMP_DIR_NAME}"
+    cleanup() { docker exec "$NODE" rm -rf "$CONTAINER_TGZ" "$EXTRACT_PATH" 2>/dev/null || true; }
+    trap cleanup EXIT
 
-    echo -e "${YELLOW}[2/5] Extracting archive in ${NODE}...${NC}"
+    echo -e "${YELLOW}[1/5] Copying archive into ${NODE}...${NC}" >&2
+    run_traced docker cp "$ARCHIVE" "$NODE:$CONTAINER_TGZ"
+    echo -e "${GREEN}✓ Copied${NC}" >&2
+
+    echo -e "${YELLOW}[2/5] Extracting archive in ${NODE}...${NC}" >&2
     run_traced docker exec "$NODE" tar -xzf "$CONTAINER_TGZ" -C /tmp
     if ! docker exec "$NODE" test -f "$EXTRACT_PATH/toc.dat"; then
         echo -e "${RED}✗ Extracted directory does not look like a pg_dump archive (no toc.dat at $EXTRACT_PATH).${NC}" >&2
@@ -927,7 +1150,9 @@ else
     echo -e "${GREEN}✓ Extracted${NC}"
 fi
 
-if [ "$RESUME_MODE" = true ]; then
+START_TS=$(date +%s)
+
+if [ "$RESUME_MODE" = true ]; thenif [ "$RESUME_MODE" = true ]; then
     echo -e "${YELLOW}[3/5] (skipped — RESUME mode preserves existing database '$TARGET')${NC}"
     echo -e "${YELLOW}[4/5] (skipped — RESUME mode reuses existing database '$TARGET')${NC}"
 else

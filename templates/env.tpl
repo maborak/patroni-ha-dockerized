@@ -76,6 +76,25 @@ PGBOUNCER_RESERVE_POOL_SIZE=10
 PGBOUNCER_RESERVE_POOL_TIMEOUT=3
 
 # ============================================================================
+# 5b. PGBADGER LOG ANALYTICS (JSON logs, cron collection + web UI)
+# ============================================================================
+# Cron expression for log collection (default: every 30 minutes).
+# Example schedules: '0 * * * *' hourly, '0 2 * * *' daily at 02:00,
+# '*/15 * * * *' every 15 minutes.
+PGBADGER_CRON_EXPRESSION=*/30 * * * *
+# Web UI port for the generated reports
+PGBADGER_PORT=8080
+# Days of raw JSON logs to keep for re-parsing (0 = keep forever)
+PGBADGER_RETENTION_DAYS=7
+# Parallel parse jobs inside the pgbadger container
+PGBADGER_JOBS=4
+# Only collect log files untouched for at least N minutes (safety window
+# so we never delete a file the logging collector still has open)
+PGBADGER_SAFETY_MINUTES=10
+# Timezone used by the cron scheduler (CRON_TZ) inside the container
+PGBADGER_TZ=UTC
+
+# ============================================================================
 # 6. BARMAN BACKUP & RETENTION
 # ============================================================================
 BARMAN_RETENTION_POLICY="RECOVERY WINDOW OF 7 DAYS"
