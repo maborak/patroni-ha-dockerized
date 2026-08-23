@@ -252,13 +252,13 @@ done
 BACKUP_DOCKERFILE="Dockerfile.barman"
 BACKUP_CONF_FILE="configs/backup.conf"
 BACKUP_CONF_MOUNT='- ./configs/backup.conf:/etc/barman.conf:ro'
-BACKUP_HEALTHCHECK='test: ["CMD-SHELL", "barman check db1 --nagios 2>/dev/null || exit 1"]'
+BACKUP_HEALTHCHECK='["CMD-SHELL", "barman check db1 --nagios 2>/dev/null || exit 1"]'
 
 if [ "$BACKUP_TOOL" = "pgbackrest" ]; then
     BACKUP_DOCKERFILE="Dockerfile.pgbackrest"
     BACKUP_CONF_FILE="configs/pgbackrest-repo.conf"
     BACKUP_CONF_MOUNT='- ./configs/pgbackrest-repo.conf:/etc/pgbackrest/pgbackrest.conf:ro'
-    BACKUP_HEALTHCHECK='test: ["CMD-SHELL", "pgbackrest info db1 >/dev/null 2>&1 || exit 1"]'
+    BACKUP_HEALTHCHECK='["CMD-SHELL", "pgbackrest info db1 >/dev/null 2>&1 || exit 1"]'
 fi
 
 # Render pgBackRest config (shared: mounted on backup host AND every node).
