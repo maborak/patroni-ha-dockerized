@@ -125,9 +125,9 @@ if [ -n "$DEPLOYED_PG" ] && [ "$DEPLOYED_PG" != "$POSTGRES_VERSION" ]; then
 fi
 
 # Resolved image references (written literally into the generated compose file)
-ETCD_IMAGE="quay.io/coreos/etcd:${ETCD_VERSION}"
-HAPROXY_IMAGE="haproxy:${HAPROXY_VERSION}"
-PGBOUNCER_IMAGE="edoburu/pgbouncer:${PGBOUNCER_VERSION}"
+ETCD_IMAGE="quay.io/coreos/etcd:${ETCD_VERSION}"   # fully-qualified (podman-safe)
+HAPROXY_IMAGE="docker.io/library/haproxy:${HAPROXY_VERSION}"
+PGBOUNCER_IMAGE="docker.io/edoburu/pgbouncer:${PGBOUNCER_VERSION}"
 
 if [ "$PATRONI_REPLICAS" -lt 1 ]; then
     echo "ERROR: PATRONI_REPLICAS must be >= 1 (got $PATRONI_REPLICAS)"

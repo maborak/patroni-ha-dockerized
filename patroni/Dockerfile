@@ -1,7 +1,7 @@
 # PostgreSQL major version — passed as a build arg from docker-compose
 # (validated against scripts/lib/versions.sh at config-generation time)
 ARG POSTGRES_VERSION=18
-FROM postgres:${POSTGRES_VERSION}
+FROM docker.io/library/postgres:${POSTGRES_VERSION}
 
 # Install dependencies
 RUN apt-get update && apt-get install -y \

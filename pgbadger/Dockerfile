@@ -1,5 +1,5 @@
 ARG ALPINE_VERSION=3.22
-FROM alpine:${ALPINE_VERSION}
+FROM docker.io/library/alpine:${ALPINE_VERSION}
 
 # pgBadger release (github.com/darold/pgbadger tags, without the leading v).
 # Installed from the upstream tarball so we are not tied to Alpine's packaged
