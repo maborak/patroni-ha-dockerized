@@ -1,3 +1,12 @@
+# Container-engine routing: every recipe resolves docker/docker-compose
+# through ./bin shims, which follow CONTAINER_ENGINE (.env). Shims are
+# generated on first parse if missing (safe no-op for docker default).
+SHELL := /bin/bash
+export PATH := $(CURDIR)/bin:$(PATH)
+ifeq ($(wildcard bin/docker),)
+$(shell bash scripts/utils/setup_engine_shims.sh >/dev/null 2>&1 || true)
+endif
+
 .PHONY: help doctor generate setup-keys up wizard down restart rebootstrap logs ps build destroy status shell-db1 shell-db2 shell-db3 shell-db4 shell-etcd1 shell-haproxy shell-barman shell show-backups check smoke-test backup dump-db restore-db list-backups check-archive pitr monitor-recovery vacuum analyze pgbadger psql psql-read psql-node list-dbs stats activity slow-queries switchover reinit failover scale switchover-to-remote switchover-from-remote test-ssh test-connectivity info config leader disk versions
 
 .DEFAULT_GOAL := help

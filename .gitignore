@@ -51,3 +51,6 @@ mybk/
 /products/
 /.opencode/
 
+
+# Engine shims (generated from CONTAINER_ENGINE)
+/bin/

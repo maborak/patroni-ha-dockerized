@@ -86,12 +86,23 @@ case "$AVAIL" in
         bad "no usable container engine — need docker or podman (binary + running daemon)" ;;
 esac
 
-# Docker-compatible CLI requirement (all scripts invoke `docker <cmd>`)
+# Docker-compatible CLI gate (all scripts invoke `docker <cmd>`).
+# With CONTAINER_ENGINE=podman the project's bin/ shims translate those
+# calls, so a system docker CLI is NOT required.
+BIN_DOCKER="$SCRIPT_DIR/../../bin/docker"
 if [ -n "$SELECTED" ] && ! have docker; then
-    bad "docker CLI not found — this stack drives containers through a docker-compatible interface"
-    echo "       Bridge podman with one of:" >&2
-    echo "         apt/dnf install podman-docker      # docker shim over podman" >&2
-    echo "         systemctl --user enable --now podman.socket  + install docker CLI" >&2
+    if [ "$SELECTED" = "podman" ]; then
+        if [ -x "$BIN_DOCKER" ]; then
+            ok "routing container calls via project shims (bin/docker → podman)"
+        else
+            warn "podman selected but bin/ shims missing — run 'make wizard' or 'bash scripts/utils/setup_engine_shims.sh' once"
+        fi
+    else
+        bad "docker CLI not found — this stack drives containers through a docker-compatible interface"
+        echo "       Bridge podman with one of:" >&2
+        echo "         apt/dnf install podman-docker      # docker shim over podman" >&2
+        echo "         systemctl --user enable --now podman.socket  + install docker CLI" >&2
+    fi
 fi
 
 # --- Daemon sanity for selected engine ---------------------------------------
@@ -121,8 +132,7 @@ else bad "compose not found — need '${SELECTED} compose' (or docker-compose / 
 fi
 
 # --- Other required commands ---------------------------------------------------
-# (docker listed explicitly so its absence is always called out by name)
-for cmd in docker openssl python3 make; do
+for cmd in openssl python3 make; do
     if have "$cmd"; then ok "$cmd"
     else bad "$cmd not found — required"
     fi

@@ -38,7 +38,8 @@ _find_project_root() {
     #    so a bare 'make wizard' works BEFORE anything is generated.
     #    Never return failure here: callers run under set -e and an empty
     #    PROJECT_ROOT would abort them with a bare "Error 1".
-    echo "${BASH_SOURCE[0]%lib/common.sh}"
+    local self="${BASH_SOURCE[0]}"
+    ( cd "$(dirname "$self")/../.." && pwd )
     return 0
 }
 
@@ -57,6 +58,19 @@ if [ -f "$PROJECT_ROOT/.env" ]; then
     set -a
     source "$PROJECT_ROOT/.env"
     set +a
+fi
+
+# ============================================================================
+# Engine routing: project bin/ shims (bin/docker, bin/docker-compose) route
+# every container CLI call through CONTAINER_ENGINE (docker|podman). See
+# scripts/utils/setup_engine_shims.sh. Prepending here covers standalone
+# script runs; the Makefile does the same for its recipes.
+# ============================================================================
+if [ -n "$PROJECT_ROOT" ] && [ -d "$PROJECT_ROOT/bin" ]; then
+    case ":$PATH:" in
+        *":$PROJECT_ROOT/bin:"*) : ;;
+        *) export PATH="$PROJECT_ROOT/bin:$PATH" ;;
+    esac
 fi
 
 # ============================================================================

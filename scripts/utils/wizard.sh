@@ -73,18 +73,26 @@ gen_password() { openssl rand -hex 12; }
 ENGINE_LIST=$(bash "$SCRIPT_DIR/../utils/check_deps.sh" engines 2>/dev/null || true)
 has_engine() { echo " $ENGINE_LIST " | grep -q " $1 "; }
 
-if has_engine docker && has_engine podman \
-        && ! grep -qE '^CONTAINER_ENGINE=' "$ENVF" 2>/dev/null; then
-    title "Container engine"
-    echo "Both docker and podman are available on this host."
-    while :; do
-        ask "Engine to drive the stack with (stored in .env as CONTAINER_ENGINE)" "docker"
-        case "$ANSWER" in
-            docker|podman) env_set CONTAINER_ENGINE "$ANSWER"; break ;;
-            *) fail_input "$ANSWER (docker or podman)" ;;
-        esac
-    done
+if ! grep -qE '^CONTAINER_ENGINE=' "$ENVF" 2>/dev/null; then
+    if has_engine docker && has_engine podman; then
+        title "Container engine"
+        echo "Both docker and podman are available on this host."
+        while :; do
+            ask "Engine to drive the stack with (stored in .env as CONTAINER_ENGINE)" "docker"
+            case "$ANSWER" in
+                docker|podman) env_set CONTAINER_ENGINE "$ANSWER"; break ;;
+                *) fail_input "$ANSWER (docker or podman)" ;;
+            esac
+        done
+    elif [ -n "$ENGINE_LIST" ] && [ "$ENGINE_LIST" != "none" ]; then
+        env_set CONTAINER_ENGINE "$ENGINE_LIST"
+        echo "Container engine auto-selected: $ENGINE_LIST"
+    fi
 fi
+
+# Generate bin/ shims so every subsequent step (and the whole project) routes
+# through the selected engine.
+bash "$SCRIPT_DIR/../utils/setup_engine_shims.sh"
 
 # Dependency preflight BEFORE anything else: a fresh host without a usable
 # engine used to die here with a bare "command not found / Error 1".
