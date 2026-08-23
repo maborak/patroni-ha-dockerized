@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Script to perform Point-In-Time Recovery (PITR) with Barman
+# Script to perform Point-In-Time Recovery (PITR) with Backup
 # Usage: ./perform_pitr.sh <backup-id> <target-time> [--target <node>]
 #
 # Environment Variables:
@@ -11,6 +11,14 @@ set -e
 
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# ── Backend gate: PITR wizard currently drives the barman backend only ──
+BACKUP_TOOL="$(grep -E '^BACKUP_TOOL=' "${PROJECT_ROOT:-$PWD}/.env" 2>/dev/null | tail -1 | cut -d= -f2)"
+if [ "${BACKUP_TOOL:-barman}" != "barman" ]; then
+    echo "✗ PITR wizard supports BACKUP_TOOL=barman only (found: $BACKUP_TOOL)." >&2
+    echo "  pgBackRest restores: pgbackrest restore --stanza=dbN --delta (runbook pending)." >&2
+    exit 1
+fi
 
 # Load shared library (provides colors, .env, node discovery, leader detection)
 source "$SCRIPT_DIR/../lib/common.sh"
@@ -66,7 +74,7 @@ BACKUP_ID=""
 TARGET_TIME=""
 START_RESTORE=false
 BACKUP_SERVER=""
-WAL_METHOD="barman-wal-restore"  # Default: barman-wal-restore or barman-get-wal
+WAL_METHOD="backup-wal-restore"  # Default: backup-wal-restore or backup-get-wal
 AUTO_START=false  # Default: don't auto-start and monitor recovery
 
 # Remote PITR (ship recovered data to a non-cluster host via SSH+rsync)
@@ -165,9 +173,9 @@ while [[ $# -gt 0 ]]; do
             if [[ "$1" == --wal-method=* ]]; then WAL_METHOD="${1#--wal-method=}"; shift
             else WAL_METHOD="$2"; shift 2
             fi
-            if [ "$WAL_METHOD" != "barman-wal-restore" ] && [ "$WAL_METHOD" != "barman-get-wal" ]; then
+            if [ "$WAL_METHOD" != "backup-wal-restore" ] && [ "$WAL_METHOD" != "backup-get-wal" ]; then
                 echo -e "${RED}Invalid --wal-method: $WAL_METHOD${NC}"
-                echo -e "${YELLOW}Valid options: barman-wal-restore, barman-get-wal${NC}"
+                echo -e "${YELLOW}Valid options: backup-wal-restore, backup-get-wal${NC}"
                 exit 1
             fi
             ;;
@@ -221,12 +229,12 @@ if [ -z "$BACKUP_ID" ] && [ -z "$TARGET_TIME" ] && [ $# -eq 0 ]; then
         
         for server in "${DB_NODES[@]}"; do
             # Get all backup lines (barman list-backup doesn't have a header, so don't skip lines)
-            BACKUPS=$(docker exec barman barman list-backup "$server" 2>/dev/null)
+            BACKUPS=$(docker exec backup barman list-backup "$server" 2>/dev/null)
             if [ -n "$BACKUPS" ]; then
                 # Read all lines, including the last one even if it doesn't end with newline
                 while IFS= read -r line || [ -n "$line" ]; do
                     if [ -n "$line" ]; then
-                        # Use the raw barman output line as-is
+                        # Use the raw backup output line as-is
                         BACKUP_LIST+=("$line")
                         # Extract server and backup ID for later use
                         BACKUP_ID=$(echo "$line" | awk '{print $2}')
@@ -328,10 +336,10 @@ if [ -z "$BACKUP_ID" ] && [ -z "$TARGET_TIME" ] && [ $# -eq 0 ]; then
     echo -e "${GREEN}Selected: ${TARGET_NODE}${NC}"
     echo ""
     
-    # Step 4: Select WAL method (default: barman-wal-restore)
+    # Step 4: Select WAL method (default: backup-wal-restore)
     echo -e "${CYAN}Step 4: Select WAL method${NC}"
     echo ""
-    WAL_MENU_OPTIONS=("barman-wal-restore (recommended)" "barman-get-wal")
+    WAL_MENU_OPTIONS=("backup-wal-restore (recommended)" "backup-get-wal")
     
     # Display menu
     echo -e "${CYAN}Select WAL method:${NC}"
@@ -343,7 +351,7 @@ if [ -z "$BACKUP_ID" ] && [ -z "$TARGET_TIME" ] && [ $# -eq 0 ]; then
     
     # Read choice with default on Enter
     while true; do
-        echo -ne "${YELLOW}Select option (1-${#WAL_MENU_OPTIONS[@]}, Enter for [barman-wal-restore], or 'q' to quit): ${NC}"
+        echo -ne "${YELLOW}Select option (1-${#WAL_MENU_OPTIONS[@]}, Enter for [backup-wal-restore], or 'q' to quit): ${NC}"
         read -r choice
         
         # Handle quit
@@ -354,7 +362,7 @@ if [ -z "$BACKUP_ID" ] && [ -z "$TARGET_TIME" ] && [ $# -eq 0 ]; then
         
         # Handle empty input (Enter) - use default
         if [ -z "$choice" ]; then
-            WAL_METHOD="barman-wal-restore"
+            WAL_METHOD="backup-wal-restore"
             echo -e "${GREEN}Using default: ${WAL_METHOD}${NC}"
             echo ""
             break
@@ -363,10 +371,10 @@ if [ -z "$BACKUP_ID" ] && [ -z "$TARGET_TIME" ] && [ $# -eq 0 ]; then
         # Validate and convert to 0-based index
         if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#WAL_MENU_OPTIONS[@]} ]; then
             SELECTED_WAL_INDEX=$((choice - 1))
-            if [ "${WAL_MENU_OPTIONS[$SELECTED_WAL_INDEX]}" = "barman-wal-restore (recommended)" ]; then
-                WAL_METHOD="barman-wal-restore"
-            elif [ "${WAL_MENU_OPTIONS[$SELECTED_WAL_INDEX]}" = "barman-get-wal" ]; then
-                WAL_METHOD="barman-get-wal"
+            if [ "${WAL_MENU_OPTIONS[$SELECTED_WAL_INDEX]}" = "backup-wal-restore (recommended)" ]; then
+                WAL_METHOD="backup-wal-restore"
+            elif [ "${WAL_MENU_OPTIONS[$SELECTED_WAL_INDEX]}" = "backup-get-wal" ]; then
+                WAL_METHOD="backup-get-wal"
             fi
             echo -e "${GREEN}Selected: ${WAL_METHOD}${NC}"
             echo ""
@@ -441,14 +449,14 @@ else
         echo "                     If not specified, you must start PostgreSQL manually"
         echo "  --auto-start       Automatically start PostgreSQL and monitor recovery progress"
         echo "                     If not specified, recovery monitoring is skipped"
-        echo "  --wal-method <method>  Method to fetch WAL files (default: barman-wal-restore)"
+        echo "  --wal-method <method>  Method to fetch WAL files (default: backup-wal-restore)"
         echo "                        Options:"
-        echo "                        - barman-wal-restore: Use barman-wal-restore command (recommended)"
-        echo "                        - barman-get-wal: Use SSH with barman get-wal command"
+        echo "                        - backup-wal-restore: Use backup-wal-restore command (recommended)"
+        echo "                        - backup-get-wal: Use SSH with barman get-wal command"
         echo ""
         echo "Available backups:"
         for server in "${DB_NODES[@]}"; do
-            BACKUPS=$(docker exec barman barman list-backup "$server" 2>/dev/null | head -10)
+            BACKUPS=$(docker exec backup barman list-backup "$server" 2>/dev/null | head -10)
             if [ -n "$BACKUPS" ]; then
                 echo -e "${CYAN}${server}:${NC}"
                 echo "$BACKUPS"
@@ -481,7 +489,7 @@ PATRONI_DATA_DIR=$(get_patroni_data_dir)
 # If the script exits with non-zero code (any error path or Ctrl+C), wipe the
 # staging dirs we created in:
 #   - host  /tmp/pitr_recovery_host_*   (39GB on the last successful run!)
-#   - barman container /tmp/pitr_recovery_* (also large)
+#   - backup container /tmp/pitr_recovery_* (also large)
 # On success (exit 0) the dirs are kept — manual-mode next-steps point at them.
 # Set KEEP_TMP_ON_FAILURE=1 to opt out (e.g. for debugging a failed restore).
 cleanup_staging_on_failure() {
@@ -491,7 +499,7 @@ cleanup_staging_on_failure() {
         echo "" >&2
         echo -e "${YELLOW}⚠ Script exited with code $ec — KEEP_TMP_ON_FAILURE=1, keeping staging dirs:${NC}" >&2
         [ -n "${HOST_RECOVERY_DIR:-}" ]      && echo -e "${YELLOW}  host:   $HOST_RECOVERY_DIR${NC}" >&2
-        [ -n "${CONTAINER_RECOVERY_DIR:-}" ] && echo -e "${YELLOW}  barman: $CONTAINER_RECOVERY_DIR${NC}" >&2
+        [ -n "${CONTAINER_RECOVERY_DIR:-}" ] && echo -e "${YELLOW}  backup: $CONTAINER_RECOVERY_DIR${NC}" >&2
         return 0
     fi
     local cleaned=0
@@ -501,10 +509,10 @@ cleanup_staging_on_failure() {
         rm -rf "$HOST_RECOVERY_DIR" 2>/dev/null && cleaned=$((cleaned + 1))
     fi
     if [ -n "${CONTAINER_RECOVERY_DIR:-}" ]; then
-        # Only attempt if barman container is up — otherwise silently skip
-        if docker exec barman test -d "$CONTAINER_RECOVERY_DIR" 2>/dev/null; then
-            echo -e "${YELLOW}⚠ Cleaning up barman:$CONTAINER_RECOVERY_DIR${NC}" >&2
-            docker exec barman rm -rf "$CONTAINER_RECOVERY_DIR" 2>/dev/null && cleaned=$((cleaned + 1))
+        # Only attempt if backup container is up — otherwise silently skip
+        if docker exec backup test -d "$CONTAINER_RECOVERY_DIR" 2>/dev/null; then
+            echo -e "${YELLOW}⚠ Cleaning up backup:$CONTAINER_RECOVERY_DIR${NC}" >&2
+            docker exec backup rm -rf "$CONTAINER_RECOVERY_DIR" 2>/dev/null && cleaned=$((cleaned + 1))
         fi
     fi
     [ "$cleaned" -gt 0 ] && echo -e "${YELLOW}  (pass KEEP_TMP_ON_FAILURE=1 to keep them on next run)${NC}" >&2
@@ -595,7 +603,7 @@ echo -e "${YELLOW}[1/8] Verifying backup exists...${NC}"
 if [ -z "$BACKUP_SERVER" ]; then
     echo -e "${CYAN}Auto-detecting backup server...${NC}"
     for server in "${DB_NODES[@]}"; do
-        if docker exec barman barman show-backup "$server" "$BACKUP_ID" > /dev/null 2>&1; then
+        if docker exec backup barman show-backup "$server" "$BACKUP_ID" > /dev/null 2>&1; then
             BACKUP_SERVER="$server"
             break
         fi
@@ -605,7 +613,7 @@ else
 fi
 
 # Verify the backup exists on the specified/detected server
-if [ -z "$BACKUP_SERVER" ] || ! docker exec barman barman show-backup "$BACKUP_SERVER" "$BACKUP_ID" > /dev/null 2>&1; then
+if [ -z "$BACKUP_SERVER" ] || ! docker exec backup barman show-backup "$BACKUP_SERVER" "$BACKUP_ID" > /dev/null 2>&1; then
     echo -e "${RED}✗ Backup ${BACKUP_ID} not found"
     if [ -n "$BACKUP_SERVER" ]; then
         echo -e "  on server: ${BACKUP_SERVER}${NC}"
@@ -614,7 +622,7 @@ if [ -z "$BACKUP_SERVER" ] || ! docker exec barman barman show-backup "$BACKUP_S
     fi
     echo "Available backups:"
     for server in "${DB_NODES[@]}"; do
-        BACKUPS=$(docker exec barman barman list-backup "$server" 2>/dev/null | head -5)
+        BACKUPS=$(docker exec backup barman list-backup "$server" 2>/dev/null | head -5)
         if [ -n "$BACKUPS" ]; then
             echo -e "${CYAN}${server}:${NC}"
             echo "$BACKUPS"
@@ -627,7 +635,7 @@ echo ""
 
 # Step 2: Show backup details and validate target time
 echo -e "${YELLOW}[2/8] Backup details:${NC}"
-BACKUP_INFO=$(docker exec barman barman show-backup "$BACKUP_SERVER" "$BACKUP_ID" 2>&1)
+BACKUP_INFO=$(docker exec backup barman show-backup "$BACKUP_SERVER" "$BACKUP_ID" 2>&1)
 echo "$BACKUP_INFO" | grep -E "(Backup|Begin time|End time|Begin WAL|End WAL)" | head -10
 echo ""
 
@@ -642,9 +650,9 @@ if [ -n "$BACKUP_END_TIME" ] && [ "$TARGET_TIME" != "latest" ]; then
     echo -e "Target time:       ${BOLD}${TARGET_TIME}${NC}"
     echo ""
     
-    # Convert times to epoch for comparison (use barman container for date command - works on macOS)
-    TARGET_EPOCH=$(docker exec barman date -d "$TARGET_TIME" +%s 2>/dev/null || docker exec barman date -d "$TARGET_TIME UTC" +%s 2>/dev/null || echo "0")
-    END_EPOCH=$(docker exec barman date -d "$BACKUP_END_TIME" +%s 2>/dev/null || echo "0")
+    # Convert times to epoch for comparison (use backup container for date command - works on macOS)
+    TARGET_EPOCH=$(docker exec backup date -d "$TARGET_TIME" +%s 2>/dev/null || docker exec backup date -d "$TARGET_TIME UTC" +%s 2>/dev/null || echo "0")
+    END_EPOCH=$(docker exec backup date -d "$BACKUP_END_TIME" +%s 2>/dev/null || echo "0")
     
     if [ "$TARGET_EPOCH" -lt "$END_EPOCH" ] && [ "$TARGET_EPOCH" -gt 0 ] && [ "$END_EPOCH" -gt 0 ]; then
         echo -e "${RED}✗ ERROR: Target time is before backup end time!${NC}"
@@ -655,7 +663,7 @@ if [ -n "$BACKUP_END_TIME" ] && [ "$TARGET_TIME" != "latest" ]; then
         echo -e "  Or use: ${BOLD}latest${NC} (to recover to most recent state)"
         echo ""
         echo -e "${YELLOW}To find available recovery points, check WAL files:${NC}"
-        echo -e "  docker exec barman barman show-server ${BACKUP_SERVER} | grep last_archived"
+        echo -e "  docker exec backup backup show-server ${BACKUP_SERVER} | grep last_archived"
         exit 1
     fi
 fi
@@ -663,7 +671,7 @@ echo ""
 
 # Step 3: Check WAL availability
 echo -e "${YELLOW}[3/8] Checking WAL archiving status...${NC}"
-WAL_STATUS=$(docker exec barman barman status "$BACKUP_SERVER" 2>&1 | grep -E "(Failures|Last archived)" | head -2)
+WAL_STATUS=$(docker exec backup backup status "$BACKUP_SERVER" 2>&1 | grep -E "(Failures|Last archived)" | head -2)
 echo "$WAL_STATUS"
 if echo "$WAL_STATUS" | grep -q "Failures.*[1-9]"; then
     echo -e "${YELLOW}⚠ Warning: WAL archiver has failures${NC}"
@@ -674,15 +682,15 @@ if [ "$TARGET_TIME" != "latest" ] && [ -n "$BACKUP_END_TIME" ]; then
     echo -e "${CYAN}Checking WAL availability for target time...${NC}"
     
     # Get the last archived WAL info
-    LAST_ARCHIVED=$(docker exec barman barman show-server "$BACKUP_SERVER" 2>&1 | grep -i "last_archived_wal" | head -1 || echo "")
+    LAST_ARCHIVED=$(docker exec backup backup show-server "$BACKUP_SERVER" 2>&1 | grep -i "last_archived_wal" | head -1 || echo "")
     if [ -n "$LAST_ARCHIVED" ]; then
         echo -e "  ${LAST_ARCHIVED}"
     fi
     
     # Check if target time is after backup end time
-    # Use barman container for date command (works on macOS where date -d doesn't work)
-    TARGET_EPOCH=$(docker exec barman date -d "$TARGET_TIME" +%s 2>/dev/null || docker exec barman date -d "$TARGET_TIME UTC" +%s 2>/dev/null || echo "0")
-    END_EPOCH=$(docker exec barman date -d "$BACKUP_END_TIME" +%s 2>/dev/null || echo "0")
+    # Use backup container for date command (works on macOS where date -d doesn't work)
+    TARGET_EPOCH=$(docker exec backup date -d "$TARGET_TIME" +%s 2>/dev/null || docker exec backup date -d "$TARGET_TIME UTC" +%s 2>/dev/null || echo "0")
+    END_EPOCH=$(docker exec backup date -d "$BACKUP_END_TIME" +%s 2>/dev/null || echo "0")
     
     if [ "$TARGET_EPOCH" -gt "$END_EPOCH" ] && [ "$TARGET_EPOCH" -gt 0 ] && [ "$END_EPOCH" -gt 0 ]; then
         TIME_DIFF=$((TARGET_EPOCH - END_EPOCH))
@@ -696,14 +704,14 @@ if [ "$TARGET_TIME" != "latest" ] && [ -n "$BACKUP_END_TIME" ]; then
             
             # Check if there's a later backup that might be better
             echo -e "${CYAN}  Checking for a later backup that might be better suited...${NC}"
-            LATER_BACKUPS=$(docker exec barman barman list-backup "$BACKUP_SERVER" 2>/dev/null | grep -A 1 "$BACKUP_ID" | tail -1 || echo "")
+            LATER_BACKUPS=$(docker exec backup barman list-backup "$BACKUP_SERVER" 2>/dev/null | grep -A 1 "$BACKUP_ID" | tail -1 || echo "")
             if [ -n "$LATER_BACKUPS" ] && echo "$LATER_BACKUPS" | grep -q "$BACKUP_SERVER"; then
                 LATER_BACKUP_ID=$(echo "$LATER_BACKUPS" | awk '{print $2}')
                 LATER_BACKUP_TIME=$(echo "$LATER_BACKUPS" | awk '{print $6, $7, $8}')
                 echo -e "${CYAN}  Found later backup: ${LATER_BACKUP_ID} (${LATER_BACKUP_TIME})${NC}"
-                LATER_BACKUP_INFO=$(docker exec barman barman show-backup "$BACKUP_SERVER" "$LATER_BACKUP_ID" 2>/dev/null | grep "End time" | sed 's/.*End time[[:space:]]*:[[:space:]]*\(.*\)/\1/' | tr -d ' ' || echo "")
+                LATER_BACKUP_INFO=$(docker exec backup barman show-backup "$BACKUP_SERVER" "$LATER_BACKUP_ID" 2>/dev/null | grep "End time" | sed 's/.*End time[[:space:]]*:[[:space:]]*\(.*\)/\1/' | tr -d ' ' || echo "")
                 if [ -n "$LATER_BACKUP_INFO" ]; then
-                    LATER_END_EPOCH=$(docker exec barman date -d "$LATER_BACKUP_INFO" +%s 2>/dev/null || docker exec barman date -d "$LATER_BACKUP_INFO UTC" +%s 2>/dev/null || echo "0")
+                    LATER_END_EPOCH=$(docker exec backup date -d "$LATER_BACKUP_INFO" +%s 2>/dev/null || docker exec backup date -d "$LATER_BACKUP_INFO UTC" +%s 2>/dev/null || echo "0")
                     if [ "$TARGET_EPOCH" -le "$LATER_END_EPOCH" ] && [ "$LATER_END_EPOCH" -gt 0 ]; then
                         echo -e "${GREEN}  ✓ This later backup (${LATER_BACKUP_ID}) ends at ${LATER_BACKUP_INFO} and covers your target time!${NC}"
                         echo -e "${CYAN}  Consider using: ${BOLD}${LATER_BACKUP_ID}${NC} instead of ${BACKUP_ID}"
@@ -788,10 +796,10 @@ if [ "$TARGET_TIME" != "latest" ] && [ -n "$BACKUP_END_TIME" ]; then
                     
                     # Check if WAL exists (complete or partial) in both wals directory and incoming directory
                     # WALs might be in incoming directory waiting for barman cron to process them
-                    WAL_EXISTS=$(docker exec barman find /data/pg-backup/${BACKUP_SERVER}/wals/${WAL_DIR} -name "${EXPECTED_WAL}" ! -name "*.backup" 2>/dev/null | head -1 || echo "")
+                    WAL_EXISTS=$(docker exec backup find /data/pg-backup/${BACKUP_SERVER}/wals/${WAL_DIR} -name "${EXPECTED_WAL}" ! -name "*.backup" 2>/dev/null | head -1 || echo "")
                     if [ -z "$WAL_EXISTS" ]; then
                         # Also check incoming directory (WALs waiting to be processed by barman cron)
-                        WAL_EXISTS=$(docker exec barman find /data/pg-backup/${BACKUP_SERVER}/incoming -name "${EXPECTED_WAL}" ! -name "*.backup" 2>/dev/null | head -1 || echo "")
+                        WAL_EXISTS=$(docker exec backup find /data/pg-backup/${BACKUP_SERVER}/incoming -name "${EXPECTED_WAL}" ! -name "*.backup" 2>/dev/null | head -1 || echo "")
                     fi
                     if [ -n "$WAL_EXISTS" ]; then
                         WAL_FOUND=true
@@ -822,14 +830,14 @@ if [ "$TARGET_TIME" != "latest" ] && [ -n "$BACKUP_END_TIME" ]; then
                 echo ""
                 
                 # Check if WAL archiving appears to have stopped or is behind
-                LAST_ARCHIVED_TIME_EPOCH=$(docker exec barman barman show-server "$BACKUP_SERVER" 2>&1 | grep -i "last_archived_time" | sed 's/.*last_archived_time[[:space:]]*:[[:space:]]*\(.*\)/\1/' | xargs -I {} docker exec barman date -d "{}" +%s 2>/dev/null || echo "0")
-                LAST_ARCHIVED_WAL=$(docker exec barman barman show-server "$BACKUP_SERVER" 2>&1 | grep -i "last_archived_wal" | sed 's/.*last_archived_wal[[:space:]]*:[[:space:]]*\(.*\)/\1/' | sed 's/\..*$//' | tr -d ' ' || echo "")
+                LAST_ARCHIVED_TIME_EPOCH=$(docker exec backup backup show-server "$BACKUP_SERVER" 2>&1 | grep -i "last_archived_time" | sed 's/.*last_archived_time[[:space:]]*:[[:space:]]*\(.*\)/\1/' | xargs -I {} docker exec backup date -d "{}" +%s 2>/dev/null || echo "0")
+                LAST_ARCHIVED_WAL=$(docker exec backup backup show-server "$BACKUP_SERVER" 2>&1 | grep -i "last_archived_wal" | sed 's/.*last_archived_wal[[:space:]]*:[[:space:]]*\(.*\)/\1/' | sed 's/\..*$//' | tr -d ' ' || echo "")
                 
                 if [ "$LAST_ARCHIVED_TIME_EPOCH" -gt 0 ] && [ "$TARGET_EPOCH" -gt "$LAST_ARCHIVED_TIME_EPOCH" ]; then
                     ARCHIVE_GAP=$((TARGET_EPOCH - LAST_ARCHIVED_TIME_EPOCH))
                     echo -e "${RED}  ⚠ CRITICAL: WAL archiving appears to have STOPPED or is BEHIND!${NC}"
                     echo -e "${YELLOW}  Last archived WAL: ${LAST_ARCHIVED_WAL}${NC}"
-                    echo -e "${YELLOW}  Last archived time: $(docker exec barman barman show-server "$BACKUP_SERVER" 2>&1 | grep -i "last_archived_time" | sed 's/.*last_archived_time[[:space:]]*:[[:space:]]*\(.*\)/\1/')${NC}"
+                    echo -e "${YELLOW}  Last archived time: $(docker exec backup backup show-server "$BACKUP_SERVER" 2>&1 | grep -i "last_archived_time" | sed 's/.*last_archived_time[[:space:]]*:[[:space:]]*\(.*\)/\1/')${NC}"
                     echo -e "${YELLOW}  Target time: ${TARGET_TIME}${NC}"
                     echo -e "${YELLOW}  Gap: ${ARCHIVE_GAP} seconds (${ARCHIVE_GAP} seconds of WALs missing)${NC}"
                     
@@ -848,7 +856,7 @@ if [ "$TARGET_TIME" != "latest" ] && [ -n "$BACKUP_END_TIME" ]; then
                     echo -e "    1. Database stopped or crashed after backup"
                     echo -e "    2. WAL archiving was disabled or failed"
                     echo -e "    3. Database is in recovery mode and not archiving new WALs"
-                    echo -e "    4. Network issues preventing WAL archiving to barman"
+                    echo -e "    4. Network issues preventing WAL archiving to backup"
                     echo -e "    5. WALs are being archived but barman cron hasn't processed them yet (check incoming directory)"
                     echo ""
                 else
@@ -884,7 +892,7 @@ if [ "$TARGET_TIME" != "latest" ] && [ -n "$BACKUP_END_TIME" ]; then
         fi
         
         echo -e "${CYAN}  If recovery fails, check WAL availability:${NC}"
-        echo -e "    docker exec barman ls -lh /data/pg-backup/${BACKUP_SERVER}/wals/*/"
+        echo -e "    docker exec backup ls -lh /data/pg-backup/${BACKUP_SERVER}/wals/*/"
     fi
 fi
 echo ""
@@ -903,11 +911,11 @@ echo -e "${CYAN}This may take several minutes depending on database size...${NC}
 echo ""
 
 if [ "$TARGET_TIME" = "latest" ]; then
-    # For 'latest', don't specify --target-time - barman will recover to end of available WAL
-    RECOVERY_CMD="docker exec barman barman recover $BACKUP_SERVER $BACKUP_ID $RECOVERY_DIR"
+    # For 'latest', don't specify --target-time - backup will recover to end of available WAL
+    RECOVERY_CMD="docker exec backup backup recover $BACKUP_SERVER $BACKUP_ID $RECOVERY_DIR"
     echo -e "${CYAN}Recovering to latest available state (end of WAL)...${NC}"
 else
-    RECOVERY_CMD="docker exec barman barman recover --target-time \"$TARGET_TIME\" $BACKUP_SERVER $BACKUP_ID $RECOVERY_DIR"
+    RECOVERY_CMD="docker exec backup backup recover --target-time \"$TARGET_TIME\" $BACKUP_SERVER $BACKUP_ID $RECOVERY_DIR"
 fi
 
 echo "Command: $RECOVERY_CMD"
@@ -917,7 +925,7 @@ if eval "$RECOVERY_CMD" 2>&1; then
     echo -e "${GREEN}✓ Recovery completed successfully${NC}"
 else
     echo -e "${RED}✗ Recovery failed!${NC}"
-    echo "Check Barman logs: docker exec barman tail -f /var/log/barman/barman.log"
+    echo "Check Backup logs: docker exec backup tail -f /var/log/backup/backup.log"
     exit 1
 fi
 echo ""
@@ -926,12 +934,12 @@ echo ""
 #
 # We DELIBERATELY avoid the "docker cp to host then rsync to remote" double-I/O
 # pattern that was here before. For both --target modes, the data streams
-# directly from the barman container — the host never sees the 39 GB twice.
+# directly from the backup container — the host never sees the 39 GB twice.
 #
-#   --target=ssh://...  → Step 7 streams `docker exec barman tar | ssh remote tar`
+#   --target=ssh://...  → Step 7 streams `docker exec backup tar | ssh remote tar`
 #                          (host = just a network relay, no /tmp staging)
-#   --target=dbN        → Step 7 runs rsync INSIDE the barman container
-#                          (barman → dbN over the Docker bridge, host uninvolved)
+#   --target=dbN        → Step 7 runs rsync INSIDE the backup container
+#                          (backup → dbN over the Docker bridge, host uninvolved)
 #   no --target         → user is in stage-only mode; we still copy to host
 #                          /tmp so they can manually inspect / move files.
 echo -e "${YELLOW}[6/8] Verifying recovery files...${NC}"
@@ -941,25 +949,25 @@ CONTAINER_RECOVERY_DIR="$RECOVERY_DIR"
 HOST_RECOVERY_DIR=""
 
 # Check if files exist inside the container
-if docker exec barman test -d "$CONTAINER_RECOVERY_DIR" 2>/dev/null && [ "$(docker exec barman ls -A $CONTAINER_RECOVERY_DIR 2>/dev/null | wc -l)" -gt 0 ]; then
+if docker exec backup test -d "$CONTAINER_RECOVERY_DIR" 2>/dev/null && [ "$(docker exec backup ls -A $CONTAINER_RECOVERY_DIR 2>/dev/null | wc -l)" -gt 0 ]; then
     echo -e "${GREEN}✓ Recovery files created in container${NC}"
 
     # Get recovery directory size from container
-    CONTAINER_SIZE=$(docker exec barman du -sh "$CONTAINER_RECOVERY_DIR" 2>/dev/null | cut -f1)
+    CONTAINER_SIZE=$(docker exec backup du -sh "$CONTAINER_RECOVERY_DIR" 2>/dev/null | cut -f1)
     echo "Recovery directory size: ${CONTAINER_SIZE}"
     echo ""
 
     # Show key files
     echo "Key files in container:"
-    docker exec barman ls -lh "$CONTAINER_RECOVERY_DIR" 2>/dev/null | head -10
+    docker exec backup ls -lh "$CONTAINER_RECOVERY_DIR" 2>/dev/null | head -10
     echo ""
 
     if [ "$REMOTE_PITR_MODE" = true ]; then
-        echo -e "${CYAN}Skipping host-side copy — Step 7 will stream tar directly from barman to remote.${NC}"
+        echo -e "${CYAN}Skipping host-side copy — Step 7 will stream tar directly from backup to remote.${NC}"
         echo -e "${CYAN}  (avoids a redundant 39 GB host-disk write/read pass for large recoveries)${NC}"
         echo ""
     elif [ "$AUTO_APPLY" = true ]; then
-        echo -e "${CYAN}Skipping host-side copy — Step 7 will rsync directly from barman to ${TARGET_NODE}.${NC}"
+        echo -e "${CYAN}Skipping host-side copy — Step 7 will rsync directly from backup to ${TARGET_NODE}.${NC}"
         echo -e "${CYAN}  (host is uninvolved — transfer stays inside the Docker bridge network)${NC}"
         echo ""
     else
@@ -969,7 +977,7 @@ if docker exec barman test -d "$CONTAINER_RECOVERY_DIR" 2>/dev/null && [ "$(dock
         echo "Container path: ${CONTAINER_RECOVERY_DIR}"
         echo "Host path: ${HOST_RECOVERY_DIR}"
         mkdir -p "$HOST_RECOVERY_DIR"
-        if docker cp "barman:${CONTAINER_RECOVERY_DIR}/." "$HOST_RECOVERY_DIR/" 2>/dev/null; then
+        if docker cp "backup:${CONTAINER_RECOVERY_DIR}/." "$HOST_RECOVERY_DIR/" 2>/dev/null; then
             echo -e "${GREEN}✓ Files copied to host${NC}"
             echo ""
             echo "Host recovery directory:"
@@ -978,14 +986,14 @@ if docker exec barman test -d "$CONTAINER_RECOVERY_DIR" 2>/dev/null && [ "$(dock
         else
             echo -e "${YELLOW}⚠ Warning: Could not copy files to host, but files exist in container${NC}"
             echo -e "${CYAN}You can copy them manually:${NC}"
-            echo "  docker cp barman:${CONTAINER_RECOVERY_DIR}/. ${HOST_RECOVERY_DIR}/"
+            echo "  docker cp backup:${CONTAINER_RECOVERY_DIR}/. ${HOST_RECOVERY_DIR}/"
             echo ""
         fi
     fi
 else
     echo -e "${RED}✗ Recovery directory is empty or not found!${NC}"
     echo "Checking container for recovery directories:"
-    docker exec barman find /tmp -name "pitr_recovery_*" -type d 2>/dev/null | head -5
+    docker exec backup find /tmp -name "pitr_recovery_*" -type d 2>/dev/null | head -5
     exit 1
 fi
 echo ""
@@ -993,12 +1001,12 @@ echo ""
 # Step 7 — REMOTE SHIP path: 3-phase staged transfer.
 #
 # Constraint that drives this design: the remote host can only reach the host
-# machine, NOT the barman container. The host is a mandatory hop, so we make it
+# machine, NOT the backup container. The host is a mandatory hop, so we make it
 # a useful one (resumability + verification) instead of just a dumb relay.
 #
 # Phase 1 — COMPRESS IN CONTAINER, WRITE TO HOST:
-#     docker exec barman "tar c . | zstd"  >  /tmp/pitr_<id>.tar.zst
-#     - Compression runs INSIDE the barman container (offloads work, also means
+#     docker exec backup "tar c . | zstd"  >  /tmp/pitr_<id>.tar.zst
+#     - Compression runs INSIDE the backup container (offloads work, also means
 #       the docker socket carries already-compressed bytes ~15 GB, not the raw 40 GB)
 #     - Picks zstd > pigz > gzip from what's installed in both the container AND remote
 #
@@ -1030,8 +1038,8 @@ if [ "$REMOTE_PITR_MODE" = true ]; then
     # cleanup explicitly.
     trap - EXIT
 
-    if ! docker exec barman test -d "$CONTAINER_RECOVERY_DIR" 2>/dev/null; then
-        echo -e "${RED}✗ Barman recovery dir not found: barman:${CONTAINER_RECOVERY_DIR}${NC}" >&2
+    if ! docker exec backup test -d "$CONTAINER_RECOVERY_DIR" 2>/dev/null; then
+        echo -e "${RED}✗ Backup recovery dir not found: backup:${CONTAINER_RECOVERY_DIR}${NC}" >&2
         exit 1
     fi
     if ! command -v rsync >/dev/null 2>&1; then
@@ -1065,10 +1073,10 @@ if [ "$REMOTE_PITR_MODE" = true ]; then
         exit 1
     fi
 
-    # Probe BARMAN CONTAINER for compressors (compression runs there, NOT on host)
-    BARMAN_TOOLS=$(docker exec barman sh -c 'for t in zstd pigz gzip; do command -v $t >/dev/null 2>&1 && echo "$t"; done' 2>/dev/null || true)
+    # Probe BACKUP CONTAINER for compressors (compression runs there, NOT on host)
+    BARMAN_TOOLS=$(docker exec backup sh -c 'for t in zstd pigz gzip; do command -v $t >/dev/null 2>&1 && echo "$t"; done' 2>/dev/null || true)
 
-    # Pick best compressor that EXISTS in barman container AND has matching decompressor on remote
+    # Pick best compressor that EXISTS in backup container AND has matching decompressor on remote
     COMP_NAME="none" ; COMP_EXT="" ; CONT_COMP_CMD="" ; REMOTE_DECOMP_CMD=""
     if [ "${TAR_NO_COMPRESS:-0}" != "1" ]; then
         if echo "$BARMAN_TOOLS" | grep -qx 'zstd' && echo "$REMOTE_TOOLS" | grep -qx 'zstd'; then
@@ -1079,9 +1087,9 @@ if [ "$REMOTE_PITR_MODE" = true ]; then
             COMP_NAME="gzip" ; COMP_EXT=".gz"  ; CONT_COMP_CMD="gzip -1"      ; REMOTE_DECOMP_CMD="gunzip"
         fi
     fi
-    # Probe barman for GNU tar (--sparse support)
+    # Probe backup for GNU tar (--sparse support)
     BARMAN_TAR_FLAGS=""
-    docker exec barman sh -c 'tar --version 2>&1 | head -1 | grep -q GNU' >/dev/null 2>&1 \
+    docker exec backup sh -c 'tar --version 2>&1 | head -1 | grep -q GNU' >/dev/null 2>&1 \
         && BARMAN_TAR_FLAGS="--sparse"
     echo -e "${GREEN}  ✓ SSH + tools OK${NC}"
     echo ""
@@ -1103,8 +1111,8 @@ if [ "$REMOTE_PITR_MODE" = true ]; then
     echo ""
 
     # --- Paths + sizes ---
-    SRC_BYTES=$(docker exec barman du -sb "$CONTAINER_RECOVERY_DIR" 2>/dev/null | awk '{print $1}')
-    SRC_HUMAN=$(docker exec barman du -sh "$CONTAINER_RECOVERY_DIR" 2>/dev/null | awk '{print $1}')
+    SRC_BYTES=$(docker exec backup du -sb "$CONTAINER_RECOVERY_DIR" 2>/dev/null | awk '{print $1}')
+    SRC_HUMAN=$(docker exec backup du -sh "$CONTAINER_RECOVERY_DIR" 2>/dev/null | awk '{print $1}')
     ARCHIVE_NAME="pitr_$(basename "$CONTAINER_RECOVERY_DIR").tar${COMP_EXT}"
     HOST_ARCHIVE="/tmp/${ARCHIVE_NAME}"
     REMOTE_ARCHIVE="/tmp/${ARCHIVE_NAME}"
@@ -1112,7 +1120,7 @@ if [ "$REMOTE_PITR_MODE" = true ]; then
 
     # --- Ship Plan ---
     echo -e "${BLUE}${BOLD}=== Ship Plan ===${NC}"
-    echo -e "  ${CYAN}Source (container):${NC}  barman:${CONTAINER_RECOVERY_DIR}  (${SRC_HUMAN:-?})"
+    echo -e "  ${CYAN}Source (container):${NC}  backup:${CONTAINER_RECOVERY_DIR}  (${SRC_HUMAN:-?})"
     echo -e "  ${CYAN}Host archive:${NC}        ${HOST_ARCHIVE}  (Phase 1 writes here, est. ~30% of source if compressed)"
     echo -e "  ${CYAN}Remote archive:${NC}      ${REMOTE_PITR_USER}@${REMOTE_PITR_HOST}:${REMOTE_ARCHIVE}"
     echo -e "  ${CYAN}Final target:${NC}        ${REMOTE_PITR_USER}@${REMOTE_PITR_HOST}:${REMOTE_PITR_PORT}${REMOTE_PITR_PATH}"
@@ -1128,15 +1136,15 @@ if [ "$REMOTE_PITR_MODE" = true ]; then
     read -r _ship_ans || _ship_ans=""
     case "$_ship_ans" in
         s|S|ship|SHIP|y|Y|yes|YES) echo -e "${GREEN}✓ Shipping...${NC}" ;;
-        *) echo -e "${YELLOW}Cancelled. Source remains at barman:${CONTAINER_RECOVERY_DIR}.${NC}"; exit 1 ;;
+        *) echo -e "${YELLOW}Cancelled. Source remains at backup:${CONTAINER_RECOVERY_DIR}.${NC}"; exit 1 ;;
     esac
     echo ""
 
     ##############################################################################
-    # PHASE 1 — Compress IN barman container, write archive to host /tmp.
+    # PHASE 1 — Compress IN backup container, write archive to host /tmp.
     # docker stdio carries compressed bytes (smaller, faster than raw).
     ##############################################################################
-    echo -e "${YELLOW}[7.3a/4] Phase 1: Compress in barman container → ${HOST_ARCHIVE}${NC}"
+    echo -e "${YELLOW}[7.3a/4] Phase 1: Compress in backup container → ${HOST_ARCHIVE}${NC}"
     PHASE1_START=$(date +%s)
 
     # Build the source command: tar [+ pv] [+ compressor], all running inside the container
@@ -1148,9 +1156,9 @@ if [ "$REMOTE_PITR_MODE" = true ]; then
     if [ "$HAS_PV" = true ] && [ -n "$SRC_BYTES" ]; then
         # Note: pv -s is the uncompressed size; actual stream is smaller after compression.
         # That makes pv ETA conservative (overestimates). Acceptable.
-        docker exec barman sh -c "$INNER_CMD" | pv -s "$SRC_BYTES" > "$HOST_ARCHIVE"
+        docker exec backup sh -c "$INNER_CMD" | pv -s "$SRC_BYTES" > "$HOST_ARCHIVE"
     else
-        docker exec barman sh -c "$INNER_CMD" > "$HOST_ARCHIVE"
+        docker exec backup sh -c "$INNER_CMD" > "$HOST_ARCHIVE"
     fi
     P1_EXITS=("${PIPESTATUS[@]}")
     set -e
@@ -1236,8 +1244,8 @@ if [ "$REMOTE_PITR_MODE" = true ]; then
     ssh $SSH_FAST_OPTS "${REMOTE_PITR_USER}@${REMOTE_PITR_HOST}" \
         "rm -f '${REMOTE_ARCHIVE}'" 2>/dev/null \
         && echo -e "${GREEN}  ✓ removed ${REMOTE_PITR_USER}@${REMOTE_PITR_HOST}:${REMOTE_ARCHIVE}${NC}"
-    docker exec barman rm -rf "$CONTAINER_RECOVERY_DIR" 2>/dev/null \
-        && echo -e "${GREEN}  ✓ removed barman:${CONTAINER_RECOVERY_DIR}${NC}"
+    docker exec backup rm -rf "$CONTAINER_RECOVERY_DIR" 2>/dev/null \
+        && echo -e "${GREEN}  ✓ removed backup:${CONTAINER_RECOVERY_DIR}${NC}"
     echo ""
 
     # --- NEXT STEPS for the user ---
@@ -1404,7 +1412,7 @@ if [ "$AUTO_APPLY" = "true" ]; then
     fi
     echo ""
     
-    # Step 7.4: Copy PITR data from barman to target node using rsync
+    # Step 7.4: Copy PITR data from backup to target node using rsync
     echo -e "${YELLOW}[7.4/10] Copying PITR data to ${TARGET_NODE} using rsync...${NC}"
     echo -e "${CYAN}  This may take several minutes...${NC}"
     
@@ -1425,26 +1433,26 @@ if [ "$AUTO_APPLY" = "true" ]; then
     # Set ownership to postgres user
     docker exec "$TARGET_NODE" chown -R postgres:postgres "$PATRONI_DATA_DIR" 2>/dev/null || true
     
-    # Verify source directory exists in barman container
-    if ! docker exec barman test -d "$CONTAINER_RECOVERY_DIR" 2>/dev/null; then
-        echo -e "${RED}  ✗ Recovery directory not found in barman container: ${CONTAINER_RECOVERY_DIR}${NC}"
+    # Verify source directory exists in backup container
+    if ! docker exec backup test -d "$CONTAINER_RECOVERY_DIR" 2>/dev/null; then
+        echo -e "${RED}  ✗ Recovery directory not found in backup container: ${CONTAINER_RECOVERY_DIR}${NC}"
         echo -e "${CYAN}  Available recovery directories:${NC}"
-        docker exec barman find /tmp -name "pitr_recovery_*" -type d 2>/dev/null | head -5
+        docker exec backup find /tmp -name "pitr_recovery_*" -type d 2>/dev/null | head -5
         exit 1
     fi
     
-    # Determine barman's SSH key location
-    BARMAN_SSH_KEY="/var/lib/barman/.ssh/id_rsa"
-    if ! docker exec barman test -f "$BARMAN_SSH_KEY" 2>/dev/null; then
-        BARMAN_SSH_KEY="/home/barman/.ssh/id_rsa"
-        if ! docker exec barman test -f "$BARMAN_SSH_KEY" 2>/dev/null; then
+    # Determine backup's SSH key location
+    BARMAN_SSH_KEY="/var/lib/backup/.ssh/id_rsa"
+    if ! docker exec backup test -f "$BARMAN_SSH_KEY" 2>/dev/null; then
+        BARMAN_SSH_KEY="/home/backup/.ssh/id_rsa"
+        if ! docker exec backup test -f "$BARMAN_SSH_KEY" 2>/dev/null; then
             echo -e "${YELLOW}  ⚠ SSH key not found, trying without explicit key path${NC}"
             BARMAN_SSH_KEY=""
         fi
     fi
     
     # Build rsync command with proper escaping and options.
-    # Speed tuning for the BARMAN→dbN copy, which travels over the Docker bridge
+    # Speed tuning for the BACKUP→dbN copy, which travels over the Docker bridge
     # (effectively memory-speed, ~10-40 Gbps):
     #   --whole-file  skip delta-xfer (target data dir was wiped above)
     #   --inplace     write in place — saves disk-space spike on dbN
@@ -1463,13 +1471,13 @@ if [ "$AUTO_APPLY" = "true" ]; then
     [ "${INTRA_COMPRESS:-0}" = "1" ] && INTRA_RSYNC_OPTS="$INTRA_RSYNC_OPTS -z"
     RSYNC_CMD="rsync -e 'ssh ${INTRA_SSH_OPTS}' ${INTRA_RSYNC_OPTS} ${CONTAINER_RECOVERY_DIR}/ postgres@${TARGET_NODE}:${PATRONI_DATA_DIR}/"
     
-    echo -e "${CYAN}  Copying from barman:${CONTAINER_RECOVERY_DIR}${NC}"
+    echo -e "${CYAN}  Copying from backup:${CONTAINER_RECOVERY_DIR}${NC}"
     echo -e "${CYAN}  Copying to postgres@${TARGET_NODE}:${PATRONI_DATA_DIR}${NC}"
     echo -e "${CYAN}  Using rsync via SSH...${NC}"
     
-    # Execute rsync from barman container
+    # Execute rsync from backup container
     # Capture both stdout and stderr
-    RSYNC_OUTPUT=$(docker exec barman bash -c "$RSYNC_CMD" 2>&1)
+    RSYNC_OUTPUT=$(docker exec backup bash -c "$RSYNC_CMD" 2>&1)
     RSYNC_EXIT_CODE=$?
     
     # Show rsync output
@@ -1502,7 +1510,7 @@ if [ "$AUTO_APPLY" = "true" ]; then
     else
         echo -e "${RED}  ✗ Failed to copy PITR data via rsync (exit code: ${RSYNC_EXIT_CODE})${NC}"
         echo -e "${CYAN}  Debug info:${NC}"
-        echo -e "    Source: barman:${CONTAINER_RECOVERY_DIR}"
+        echo -e "    Source: backup:${CONTAINER_RECOVERY_DIR}"
         echo -e "    Target: postgres@${TARGET_NODE}:${PATRONI_DATA_DIR}"
         echo -e "    SSH Key: ${BARMAN_SSH_KEY:-default}"
         exit 1
@@ -1527,22 +1535,22 @@ if [ "$AUTO_APPLY" = "true" ]; then
     fi
     echo ""
     
-    # Step 7.4a: Ensure SSH key is in default location for barman-wal-restore
-    echo -e "${YELLOW}[7.4a/10] Setting up SSH key for barman-wal-restore...${NC}"
-    # barman-wal-restore uses SSH and expects the key at ~/.ssh/id_rsa (default location)
+    # Step 7.4a: Ensure SSH key is in default location for backup-wal-restore
+    echo -e "${YELLOW}[7.4a/10] Setting up SSH key for backup-wal-restore...${NC}"
+    # backup-wal-restore uses SSH and expects the key at ~/.ssh/id_rsa (default location)
     # Get postgres user's actual home directory (usually /var/lib/postgresql)
     POSTGRES_HOME=$(docker exec "$TARGET_NODE" getent passwd postgres 2>/dev/null | cut -d: -f6 || echo "/var/lib/postgresql")
     echo -e "${CYAN}  Postgres home directory: $POSTGRES_HOME${NC}"
     
     # Check if source key exists
-    if ! docker exec "$TARGET_NODE" test -f /var/lib/postgresql/.ssh/barman_rsa 2>/dev/null; then
-        echo -e "${YELLOW}  ⚠ WARNING: SSH key not found at /var/lib/postgresql/.ssh/barman_rsa${NC}"
+    if ! docker exec "$TARGET_NODE" test -f /var/lib/postgresql/.ssh/backup_rsa 2>/dev/null; then
+        echo -e "${YELLOW}  ⚠ WARNING: SSH key not found at /var/lib/postgresql/.ssh/backup_rsa${NC}"
         echo -e "${CYAN}  Checking alternative locations...${NC}"
         # Try to find the key in other locations
-        if docker exec "$TARGET_NODE" test -f /home/postgres/.ssh/barman_rsa 2>/dev/null; then
-            echo -e "${CYAN}  Found key at /home/postgres/.ssh/barman_rsa, copying...${NC}"
+        if docker exec "$TARGET_NODE" test -f /home/postgres/.ssh/backup_rsa 2>/dev/null; then
+            echo -e "${CYAN}  Found key at /home/postgres/.ssh/backup_rsa, copying...${NC}"
             docker exec "$TARGET_NODE" mkdir -p "$POSTGRES_HOME/.ssh" 2>/dev/null
-            docker exec "$TARGET_NODE" cp /home/postgres/.ssh/barman_rsa "$POSTGRES_HOME/.ssh/id_rsa" 2>/dev/null
+            docker exec "$TARGET_NODE" cp /home/postgres/.ssh/backup_rsa "$POSTGRES_HOME/.ssh/id_rsa" 2>/dev/null
             docker exec "$TARGET_NODE" chown postgres:postgres "$POSTGRES_HOME/.ssh/id_rsa" 2>/dev/null
             docker exec "$TARGET_NODE" chmod 600 "$POSTGRES_HOME/.ssh/id_rsa" 2>/dev/null
             docker exec "$TARGET_NODE" chown postgres:postgres "$POSTGRES_HOME/.ssh" 2>/dev/null
@@ -1551,14 +1559,14 @@ if [ "$AUTO_APPLY" = "true" ]; then
     else
         # Source key exists, copy it to the home directory
         if ! docker exec "$TARGET_NODE" test -f "$POSTGRES_HOME/.ssh/id_rsa" 2>/dev/null; then
-            echo -e "${CYAN}  Copying SSH key from /var/lib/postgresql/.ssh/barman_rsa to $POSTGRES_HOME/.ssh/id_rsa${NC}"
+            echo -e "${CYAN}  Copying SSH key from /var/lib/postgresql/.ssh/backup_rsa to $POSTGRES_HOME/.ssh/id_rsa${NC}"
             # Create .ssh directory if it doesn't exist
             docker exec "$TARGET_NODE" mkdir -p "$POSTGRES_HOME/.ssh" 2>/dev/null
             docker exec "$TARGET_NODE" chown postgres:postgres "$POSTGRES_HOME/.ssh" 2>/dev/null
             docker exec "$TARGET_NODE" chmod 700 "$POSTGRES_HOME/.ssh" 2>/dev/null
             
             # Copy the key
-            docker exec "$TARGET_NODE" cp /var/lib/postgresql/.ssh/barman_rsa "$POSTGRES_HOME/.ssh/id_rsa" 2>/dev/null
+            docker exec "$TARGET_NODE" cp /var/lib/postgresql/.ssh/backup_rsa "$POSTGRES_HOME/.ssh/id_rsa" 2>/dev/null
             docker exec "$TARGET_NODE" chown postgres:postgres "$POSTGRES_HOME/.ssh/id_rsa" 2>/dev/null
             docker exec "$TARGET_NODE" chmod 600 "$POSTGRES_HOME/.ssh/id_rsa" 2>/dev/null
             
@@ -1578,9 +1586,9 @@ if [ "$AUTO_APPLY" = "true" ]; then
     echo -e "${GREEN}  ✓ SSH key configured${NC}"
     echo ""
     
-    # Step 7.4b: Establish initial SSH connection to Barman to accept host key
-    echo -e "${YELLOW}[7.4b/10] Establishing SSH connection to Barman...${NC}"
-    echo -e "${CYAN}  This will accept the Barman host key to avoid connection errors during recovery${NC}"
+    # Step 7.4b: Establish initial SSH connection to Backup to accept host key
+    echo -e "${YELLOW}[7.4b/10] Establishing SSH connection to Backup...${NC}"
+    echo -e "${CYAN}  This will accept the Backup host key to avoid connection errors during recovery${NC}"
     
     # Ensure .ssh directory exists and has correct permissions (already done above, but ensure it's set)
     docker exec "$TARGET_NODE" mkdir -p "$POSTGRES_HOME/.ssh" 2>/dev/null
@@ -1593,45 +1601,45 @@ if [ "$AUTO_APPLY" = "true" ]; then
         SSH_KEY_PATH="$POSTGRES_HOME/.ssh/id_rsa"
     elif docker exec "$TARGET_NODE" test -f /var/lib/postgresql/.ssh/id_rsa 2>/dev/null; then
         SSH_KEY_PATH="/var/lib/postgresql/.ssh/id_rsa"
-    elif docker exec "$TARGET_NODE" test -f /var/lib/postgresql/.ssh/barman_rsa 2>/dev/null; then
-        SSH_KEY_PATH="/var/lib/postgresql/.ssh/barman_rsa"
+    elif docker exec "$TARGET_NODE" test -f /var/lib/postgresql/.ssh/backup_rsa 2>/dev/null; then
+        SSH_KEY_PATH="/var/lib/postgresql/.ssh/backup_rsa"
     fi
     
     # Perform initial SSH connection to accept host key
     # Use StrictHostKeyChecking=accept-new (SSH 7.6+) or yes (older versions)
     SSH_CMD=""
     if [ -n "$SSH_KEY_PATH" ]; then
-        SSH_CMD="ssh -i ${SSH_KEY_PATH} -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 barman@barman 'echo SSH connection successful'"
+        SSH_CMD="ssh -i ${SSH_KEY_PATH} -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 backup@backup 'echo SSH connection successful'"
     else
-        SSH_CMD="ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 barman@barman 'echo SSH connection successful'"
+        SSH_CMD="ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 backup@backup 'echo SSH connection successful'"
     fi
     
     if docker exec "$TARGET_NODE" su - postgres -c "$SSH_CMD" 2>&1 | grep -q "SSH connection successful"; then
-        echo -e "${GREEN}  ✓ SSH connection to Barman established${NC}"
-        echo -e "${CYAN}  Barman host key has been added to known_hosts${NC}"
+        echo -e "${GREEN}  ✓ SSH connection to Backup established${NC}"
+        echo -e "${CYAN}  Backup host key has been added to known_hosts${NC}"
     else
         # Fallback: try with StrictHostKeyChecking=yes (for older SSH versions)
         if [ -n "$SSH_KEY_PATH" ]; then
-            SSH_CMD_FALLBACK="ssh -i ${SSH_KEY_PATH} -o StrictHostKeyChecking=yes -o ConnectTimeout=10 barman@barman 'echo SSH connection successful'"
+            SSH_CMD_FALLBACK="ssh -i ${SSH_KEY_PATH} -o StrictHostKeyChecking=yes -o ConnectTimeout=10 backup@backup 'echo SSH connection successful'"
         else
-            SSH_CMD_FALLBACK="ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=10 barman@barman 'echo SSH connection successful'"
+            SSH_CMD_FALLBACK="ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=10 backup@backup 'echo SSH connection successful'"
         fi
         
         if docker exec "$TARGET_NODE" su - postgres -c "$SSH_CMD_FALLBACK" 2>&1 | grep -q "SSH connection successful"; then
-            echo -e "${GREEN}  ✓ SSH connection to Barman established${NC}"
-            echo -e "${CYAN}  Barman host key has been added to known_hosts${NC}"
+            echo -e "${GREEN}  ✓ SSH connection to Backup established${NC}"
+            echo -e "${CYAN}  Backup host key has been added to known_hosts${NC}"
         else
             echo -e "${YELLOW}  ⚠ Warning: Could not establish SSH connection${NC}"
-            echo -e "${CYAN}  Attempting to add Barman host key manually...${NC}"
-            # Try to get Barman's host key and add it manually
-            BARMAN_HOST_KEY=$(docker exec barman ssh-keyscan -t rsa barman 2>/dev/null | head -1 || echo "")
+            echo -e "${CYAN}  Attempting to add Backup host key manually...${NC}"
+            # Try to get Backup's host key and add it manually
+            BARMAN_HOST_KEY=$(docker exec backup ssh-keyscan -t rsa backup 2>/dev/null | head -1 || echo "")
             if [ -n "$BARMAN_HOST_KEY" ]; then
                 # POSTGRES_HOME already set above, but ensure it's available here
                 if [ -z "$POSTGRES_HOME" ]; then
                     POSTGRES_HOME=$(docker exec "$TARGET_NODE" getent passwd postgres 2>/dev/null | cut -d: -f6 || echo "/var/lib/postgresql")
                 fi
                 docker exec "$TARGET_NODE" bash -c "echo '$BARMAN_HOST_KEY' >> $POSTGRES_HOME/.ssh/known_hosts && chmod 600 $POSTGRES_HOME/.ssh/known_hosts && chown postgres:postgres $POSTGRES_HOME/.ssh/known_hosts" 2>/dev/null
-                echo -e "${GREEN}  ✓ Barman host key added to known_hosts${NC}"
+                echo -e "${GREEN}  ✓ Backup host key added to known_hosts${NC}"
             else
                 echo -e "${YELLOW}  ⚠ Could not add host key automatically, but continuing anyway${NC}"
                 echo -e "${CYAN}  The connection will be established during recovery when needed${NC}"
@@ -1643,10 +1651,10 @@ if [ "$AUTO_APPLY" = "true" ]; then
     # Step 7.5a: Fix postgresql.auto.conf with proper restore_command
     echo -e "${YELLOW}[7.5a/10] Fixing recovery configuration...${NC}"
     
-    # First, check if postgresql.auto.conf exists in recovery directory (from barman)
-    if docker exec barman test -f "$CONTAINER_RECOVERY_DIR/postgresql.auto.conf" 2>/dev/null; then
-        # Copy the original from barman and modify restore_command
-        docker exec barman cat "$CONTAINER_RECOVERY_DIR/postgresql.auto.conf" > /tmp/postgresql.auto.conf.orig
+    # First, check if postgresql.auto.conf exists in recovery directory (from backup)
+    if docker exec backup test -f "$CONTAINER_RECOVERY_DIR/postgresql.auto.conf" 2>/dev/null; then
+        # Copy the original from backup and modify restore_command
+        docker exec backup cat "$CONTAINER_RECOVERY_DIR/postgresql.auto.conf" > /tmp/postgresql.auto.conf.orig
         docker cp /tmp/postgresql.auto.conf.orig "$TARGET_NODE:$PATRONI_DATA_DIR/postgresql.auto.conf"
         
         # Get recovery target time (preserve spaces in the timestamp)
@@ -1658,15 +1666,15 @@ if [ "$AUTO_APPLY" = "true" ]; then
         fi
         
         # Build restore_command based on selected method
-        if [ "$WAL_METHOD" = "barman-wal-restore" ]; then
-            # restore_command using barman-wal-restore
-            RESTORE_CMD="barman-wal-restore -U barman barman ${BACKUP_SERVER} %f %p"
-            RESTORE_CMD_ESCAPED="barman-wal-restore -U barman barman ${BACKUP_SERVER} %f %p"
-            echo -e "${CYAN}  Updating restore_command to use barman-wal-restore...${NC}"
+        if [ "$WAL_METHOD" = "backup-wal-restore" ]; then
+            # restore_command using backup-wal-restore
+            RESTORE_CMD="backup-wal-restore -U backup backup ${BACKUP_SERVER} %f %p"
+            RESTORE_CMD_ESCAPED="backup-wal-restore -U backup backup ${BACKUP_SERVER} %f %p"
+            echo -e "${CYAN}  Updating restore_command to use backup-wal-restore...${NC}"
         else
             # restore_command using SSH with barman get-wal (atomic-safe version)
-            RESTORE_CMD="test -f %p || (umask 077; tmp=\"%p.tmp.\$\$\"; ssh -o BatchMode=yes barman@barman \"barman get-wal ${BACKUP_SERVER} %f\" > \"\$tmp\" && mv \"\$tmp\" %p)"
-            RESTORE_CMD_ESCAPED="test -f %p || (umask 077; tmp=\\\"%p.tmp.\\\$\\\$\\\"; ssh -o BatchMode=yes barman@barman \\\"barman get-wal ${BACKUP_SERVER} %f\\\" > \\\"\\\$tmp\\\" && mv \\\"\\\$tmp\\\" %p)"
+            RESTORE_CMD="test -f %p || (umask 077; tmp=\"%p.tmp.\$\$\"; ssh -o BatchMode=yes backup@backup \"barman get-wal ${BACKUP_SERVER} %f\" > \"\$tmp\" && mv \"\$tmp\" %p)"
+            RESTORE_CMD_ESCAPED="test -f %p || (umask 077; tmp=\\\"%p.tmp.\\\$\\\$\\\"; ssh -o BatchMode=yes backup@backup \\\"barman get-wal ${BACKUP_SERVER} %f\\\" > \\\"\\\$tmp\\\" && mv \\\"\\\$tmp\\\" %p)"
             echo -e "${CYAN}  Updating restore_command to use barman get-wal via SSH...${NC}"
         fi
         # Write the file using a temp file approach to handle special characters in restore_command
@@ -1676,11 +1684,11 @@ if [ "$AUTO_APPLY" = "true" ]; then
             printf '# It will be overwritten by the ALTER SYSTEM command.\n' >> $PATRONI_DATA_DIR/postgresql.auto.conf
             printf '\n' >> $PATRONI_DATA_DIR/postgresql.auto.conf
             printf '# Restore command options:\n' >> $PATRONI_DATA_DIR/postgresql.auto.conf
-            printf '#   barman-wal-restore: barman-wal-restore -U barman barman %s %%f %%p\n' '${BACKUP_SERVER}' >> $PATRONI_DATA_DIR/postgresql.auto.conf
-            printf '#   barman get-wal: test -f %%p || (umask 077; tmp=\\\"%%p.tmp.$$\"; ssh -o BatchMode=yes barman@barman \"barman get-wal %s %%f\" > \"\\\$tmp\" && mv \"\\\$tmp\" %%p)\n' '${BACKUP_SERVER}' >> $PATRONI_DATA_DIR/postgresql.auto.conf
+            printf '#   backup-wal-restore: backup-wal-restore -U backup backup %s %%f %%p\n' '${BACKUP_SERVER}' >> $PATRONI_DATA_DIR/postgresql.auto.conf
+            printf '#   barman get-wal: test -f %%p || (umask 077; tmp=\\\"%%p.tmp.$$\"; ssh -o BatchMode=yes backup@backup \"barman get-wal %s %%f\" > \"\\\$tmp\" && mv \"\\\$tmp\" %%p)\n' '${BACKUP_SERVER}' >> $PATRONI_DATA_DIR/postgresql.auto.conf
             printf '\n' >> $PATRONI_DATA_DIR/postgresql.auto.conf
-            if [ "$WAL_METHOD" = "barman-wal-restore" ]; then
-                printf '# Using: barman-wal-restore method\n' >> $PATRONI_DATA_DIR/postgresql.auto.conf
+            if [ "$WAL_METHOD" = "backup-wal-restore" ]; then
+                printf '# Using: backup-wal-restore method\n' >> $PATRONI_DATA_DIR/postgresql.auto.conf
             else
                 printf '# Using: barman get-wal method\n' >> $PATRONI_DATA_DIR/postgresql.auto.conf
             fi
@@ -1739,12 +1747,12 @@ if [ "$AUTO_APPLY" = "true" ]; then
     else
         # Create new postgresql.auto.conf if it doesn't exist
         # Build restore_command based on selected method
-        if [ "$WAL_METHOD" = "barman-wal-restore" ]; then
-            # restore_command using barman-wal-restore
-            RESTORE_CMD_ESCAPED="barman-wal-restore -U barman barman ${BACKUP_SERVER} %f %p"
+        if [ "$WAL_METHOD" = "backup-wal-restore" ]; then
+            # restore_command using backup-wal-restore
+            RESTORE_CMD_ESCAPED="backup-wal-restore -U backup backup ${BACKUP_SERVER} %f %p"
         else
             # restore_command using SSH with barman get-wal (atomic-safe version)
-            RESTORE_CMD_ESCAPED="test -f %p || (umask 077; tmp=\\\"%p.tmp.\\\$\\\$\\\"; ssh -o BatchMode=yes barman@barman \\\"barman get-wal ${BACKUP_SERVER} %f\\\" > \\\"\\\$tmp\\\" && mv \\\"\\\$tmp\\\" %p)"
+            RESTORE_CMD_ESCAPED="test -f %p || (umask 077; tmp=\\\"%p.tmp.\\\$\\\$\\\"; ssh -o BatchMode=yes backup@backup \\\"barman get-wal ${BACKUP_SERVER} %f\\\" > \\\"\\\$tmp\\\" && mv \\\"\\\$tmp\\\" %p)"
         fi
         if [ "$TARGET_TIME" = "latest" ]; then
             RECOVERY_TARGET_TIME=""
@@ -1757,11 +1765,11 @@ if [ "$AUTO_APPLY" = "true" ]; then
             printf '# It will be overwritten by the ALTER SYSTEM command.\n' >> $PATRONI_DATA_DIR/postgresql.auto.conf
             printf '\n' >> $PATRONI_DATA_DIR/postgresql.auto.conf
             printf '# Restore command options:\n' >> $PATRONI_DATA_DIR/postgresql.auto.conf
-            printf '#   barman-wal-restore: barman-wal-restore -U barman barman %s %%f %%p\n' '${BACKUP_SERVER}' >> $PATRONI_DATA_DIR/postgresql.auto.conf
-            printf '#   barman get-wal: test -f %%p || (umask 077; tmp=\\\"%%p.tmp.$$\"; ssh -o BatchMode=yes barman@barman \"barman get-wal %s %%f\" > \"\\\$tmp\" && mv \"\\\$tmp\" %%p)\n' '${BACKUP_SERVER}' >> $PATRONI_DATA_DIR/postgresql.auto.conf
+            printf '#   backup-wal-restore: backup-wal-restore -U backup backup %s %%f %%p\n' '${BACKUP_SERVER}' >> $PATRONI_DATA_DIR/postgresql.auto.conf
+            printf '#   barman get-wal: test -f %%p || (umask 077; tmp=\\\"%%p.tmp.$$\"; ssh -o BatchMode=yes backup@backup \"barman get-wal %s %%f\" > \"\\\$tmp\" && mv \"\\\$tmp\" %%p)\n' '${BACKUP_SERVER}' >> $PATRONI_DATA_DIR/postgresql.auto.conf
             printf '\n' >> $PATRONI_DATA_DIR/postgresql.auto.conf
-            if [ "$WAL_METHOD" = "barman-wal-restore" ]; then
-                printf '# Using: barman-wal-restore method\n' >> $PATRONI_DATA_DIR/postgresql.auto.conf
+            if [ "$WAL_METHOD" = "backup-wal-restore" ]; then
+                printf '# Using: backup-wal-restore method\n' >> $PATRONI_DATA_DIR/postgresql.auto.conf
             else
                 printf '# Using: barman get-wal method\n' >> $PATRONI_DATA_DIR/postgresql.auto.conf
             fi
@@ -1805,7 +1813,7 @@ if [ "$AUTO_APPLY" = "true" ]; then
     # Verify the file was created correctly
     if docker exec "$TARGET_NODE" grep -q "restore_command" "$PATRONI_DATA_DIR/postgresql.auto.conf" 2>/dev/null; then
         echo -e "${GREEN}  ✓ Recovery configuration in postgresql.auto.conf${NC}"
-        echo -e "${CYAN}  Using pure Barman configuration from postgresql.auto.conf${NC}"
+        echo -e "${CYAN}  Using pure Backup configuration from postgresql.auto.conf${NC}"
     else
         echo -e "${RED}  ✗ Failed to create recovery configuration in postgresql.auto.conf${NC}"
         exit 1
@@ -1995,9 +2003,9 @@ if [ "$AUTO_APPLY" = "true" ]; then
             fi
             # Format timeline as 8-digit hex (e.g., 7 -> 00000007)
             TIMELINE_PATTERN=$(printf "%08X" "$BACKUP_TIMELINE" 2>/dev/null || echo "00000004")
-            AVAILABLE_WALS=$(docker exec barman find /data/pg-backup/${BACKUP_SERVER}/wals -type f -name "${TIMELINE_PATTERN}*" ! -name "*.backup" ! -name "*.partial" 2>/dev/null | xargs -I {} basename {} | sort -u || echo "")
+            AVAILABLE_WALS=$(docker exec backup find /data/pg-backup/${BACKUP_SERVER}/wals -type f -name "${TIMELINE_PATTERN}*" ! -name "*.backup" ! -name "*.partial" 2>/dev/null | xargs -I {} basename {} | sort -u || echo "")
             if [ -n "$AVAILABLE_WALS" ]; then
-                echo -e "${CYAN}Available WAL files in barman:${NC}"
+                echo -e "${CYAN}Available WAL files in backup:${NC}"
                 echo "$AVAILABLE_WALS" | head -10
                 WAL_COUNT=$(echo "$AVAILABLE_WALS" | wc -l)
                 echo -e "${CYAN}  Total: ${WAL_COUNT} WAL file(s)${NC}"
@@ -2012,7 +2020,7 @@ if [ "$AUTO_APPLY" = "true" ]; then
                     if [ -n "$NEXT_SEGMENT_HEX" ]; then
                         NEXT_WAL="${BACKUP_END_WAL%????????}${NEXT_SEGMENT_HEX}"
                         # Check if next WAL exists (complete or partial)
-                        PARTIAL_WAL=$(docker exec barman find /data/pg-backup/${BACKUP_SERVER}/wals -type f -name "${NEXT_WAL}.partial" 2>/dev/null | head -1 || echo "")
+                        PARTIAL_WAL=$(docker exec backup find /data/pg-backup/${BACKUP_SERVER}/wals -type f -name "${NEXT_WAL}.partial" 2>/dev/null | head -1 || echo "")
                         if echo "$AVAILABLE_WALS" | grep -q "^${NEXT_WAL}$"; then
                             echo -e "${GREEN}  ✓ Next WAL file (${NEXT_WAL}) exists${NC}"
                         elif [ -n "$PARTIAL_WAL" ]; then
@@ -2038,12 +2046,12 @@ if [ "$AUTO_APPLY" = "true" ]; then
             
             echo -e "${CYAN}Possible causes:${NC}"
             echo -e "  1. WAL archiving was not active during the target time period"
-            echo -e "  2. WAL files were not archived to barman (check for gaps in WAL sequence)"
+            echo -e "  2. WAL files were not archived to backup (check for gaps in WAL sequence)"
             echo -e "  3. The target time is beyond available WAL files"
             echo ""
             echo -e "${CYAN}Check WAL availability:${NC}"
-            echo -e "  docker exec barman ls -lh /data/pg-backup/${BACKUP_SERVER}/wals/*/"
-            echo -e "  docker exec barman barman show-server ${BACKUP_SERVER} | grep -i archive"
+            echo -e "  docker exec backup ls -lh /data/pg-backup/${BACKUP_SERVER}/wals/*/"
+            echo -e "  docker exec backup backup show-server ${BACKUP_SERVER} | grep -i archive"
             echo ""
             echo -e "${CYAN}Check restore_command:${NC}"
             echo -e "  docker exec ${TARGET_NODE} cat ${PATRONI_DATA_DIR}/postgresql.auto.conf | grep restore_command"
@@ -2245,23 +2253,23 @@ if [ "$AUTO_APPLY" = "true" ]; then
     echo -e "${CYAN}[7.7a/10] Ensuring recovery configuration is set...${NC}"
     sleep 2  # Give Patroni a moment to initialize
     # Build restore_command based on selected method
-    if [ "$WAL_METHOD" = "barman-wal-restore" ]; then
-        # restore_command using barman-wal-restore with SSH batch mode
-        RESTORE_CMD_ESCAPED="barman-wal-restore -U barman barman ${BACKUP_SERVER} %f %p"
+    if [ "$WAL_METHOD" = "backup-wal-restore" ]; then
+        # restore_command using backup-wal-restore with SSH batch mode
+        RESTORE_CMD_ESCAPED="backup-wal-restore -U backup backup ${BACKUP_SERVER} %f %p"
     else
         # restore_command using SSH with barman get-wal (atomic-safe version)
-        RESTORE_CMD_ESCAPED="test -f %p || (umask 077; tmp=\\\"%p.tmp.$$\\\"; ssh -o BatchMode=yes barman@barman \\\"barman get-wal ${BACKUP_SERVER} %f\\\" > \\\"\\\$tmp\\\" && mv \\\"\\\$tmp\\\" %p)"
+        RESTORE_CMD_ESCAPED="test -f %p || (umask 077; tmp=\\\"%p.tmp.$$\\\"; ssh -o BatchMode=yes backup@backup \\\"barman get-wal ${BACKUP_SERVER} %f\\\" > \\\"\\\$tmp\\\" && mv \\\"\\\$tmp\\\" %p)"
     fi
         docker exec "$TARGET_NODE" bash -c "
             printf '# Do not edit this file manually!\n' > $PATRONI_DATA_DIR/postgresql.auto.conf
             printf '# It will be overwritten by the ALTER SYSTEM command.\n' >> $PATRONI_DATA_DIR/postgresql.auto.conf
             printf '\n' >> $PATRONI_DATA_DIR/postgresql.auto.conf
             printf '# Restore command options:\n' >> $PATRONI_DATA_DIR/postgresql.auto.conf
-            printf '#   barman-wal-restore: barman-wal-restore -U barman barman %s %%f %%p\n' '${BACKUP_SERVER}' >> $PATRONI_DATA_DIR/postgresql.auto.conf
-            printf '#   barman get-wal: test -f %%p || (umask 077; tmp=\\\"%%p.tmp.$$\"; ssh -o BatchMode=yes barman@barman \"barman get-wal %s %%f\" > \"\\\$tmp\" && mv \"\\\$tmp\" %%p)\n' '${BACKUP_SERVER}' >> $PATRONI_DATA_DIR/postgresql.auto.conf
+            printf '#   backup-wal-restore: backup-wal-restore -U backup backup %s %%f %%p\n' '${BACKUP_SERVER}' >> $PATRONI_DATA_DIR/postgresql.auto.conf
+            printf '#   barman get-wal: test -f %%p || (umask 077; tmp=\\\"%%p.tmp.$$\"; ssh -o BatchMode=yes backup@backup \"barman get-wal %s %%f\" > \"\\\$tmp\" && mv \"\\\$tmp\" %%p)\n' '${BACKUP_SERVER}' >> $PATRONI_DATA_DIR/postgresql.auto.conf
             printf '\n' >> $PATRONI_DATA_DIR/postgresql.auto.conf
-            if [ \"$WAL_METHOD\" = \"barman-wal-restore\" ]; then
-                printf '# Using: barman-wal-restore method\n' >> $PATRONI_DATA_DIR/postgresql.auto.conf
+            if [ \"$WAL_METHOD\" = \"backup-wal-restore\" ]; then
+                printf '# Using: backup-wal-restore method\n' >> $PATRONI_DATA_DIR/postgresql.auto.conf
             else
                 printf '# Using: barman get-wal method\n' >> $PATRONI_DATA_DIR/postgresql.auto.conf
             fi
@@ -2668,7 +2676,7 @@ echo -e "${BLUE}${BOLD}  Recovery Complete - Next Steps${NC}"
 echo -e "${BLUE}${BOLD}========================================${NC}"
 echo ""
 echo -e "${CYAN}Recovery files location:${NC}"
-echo -e "  Container: ${BOLD}barman:${CONTAINER_RECOVERY_DIR}${NC}"
+echo -e "  Container: ${BOLD}backup:${CONTAINER_RECOVERY_DIR}${NC}"
 if [ -n "$HOST_RECOVERY_DIR" ] && [ -d "$HOST_RECOVERY_DIR" ] 2>/dev/null; then
     echo -e "  Host:      ${BOLD}${HOST_RECOVERY_DIR}${NC}"
 fi
@@ -2696,8 +2704,8 @@ echo ""
 echo "4. Backup current data:"
 echo "   docker exec $TARGET_NODE mv ${PATRONI_DATA_DIR} ${PATRONI_DATA_DIR}.backup"
 echo ""
-echo "5. Copy recovered data from Barman container:"
-echo "   docker cp barman:${CONTAINER_RECOVERY_DIR}/. $TARGET_NODE:${PATRONI_DATA_DIR}/"
+echo "5. Copy recovered data from Backup container:"
+echo "   docker cp backup:${CONTAINER_RECOVERY_DIR}/. $TARGET_NODE:${PATRONI_DATA_DIR}/"
 echo ""
 if [ -n "$HOST_RECOVERY_DIR" ] && [ -d "$HOST_RECOVERY_DIR" ] 2>/dev/null; then
     echo "   OR copy from host:"

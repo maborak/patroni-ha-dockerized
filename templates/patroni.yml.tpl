@@ -154,12 +154,8 @@ postgresql:
   pgpass: /var/lib/postgresql/.pgpass_patroni
   parameters:
     unix_socket_directories: /var/run/postgresql
-    # archive_command delegates to a baked-in script: PG18-safe (only %p/%f
-    # placeholders — PG18 rejects any other literal %), strict failure
-    # semantics (non-zero exit ⇒ PostgreSQL retries), dedicated logging.
-    # See patroni/archive-wal.sh.
-    archive_mode: on
-    archive_command: "/usr/local/bin/archive-wal.sh %p %f"
+    archive_mode: __ARCHIVE_MODE__
+    archive_command: "__ARCHIVE_COMMAND__"
   authentication:
     replication:
       username: __REPLICATOR_USER__
@@ -173,7 +169,7 @@ postgresql:
     max-rate: '__PATRONI_BASEBACKUP_MAX_RATE__'
     checkpoint: 'fast'
   recovery_conf:
-    restore_command: 'rsync -e "ssh -i /var/lib/postgresql/.ssh/barman_rsa -p 22 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" -a barman@barman:/data/pg-backup/__NODE_NAME__/wals/*/%f /tmp/%f 2>/dev/null && (gunzip -c /tmp/%f > %p 2>/dev/null || cp /tmp/%f %p) && rm -f /tmp/%f || exit 0'
+    restore_command: '__RESTORE_COMMAND__'
 
 tags:
   nofailover: false

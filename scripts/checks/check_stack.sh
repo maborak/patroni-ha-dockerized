@@ -119,7 +119,7 @@ for db in "${DB_NODES[@]}"; do
     check_container "$db"
 done
 check_container "haproxy"
-check_container "barman"
+check_container "backup"
 check_container "pgbouncer"
 check_container "pgbouncer-ro"
 echo ""
@@ -205,18 +205,24 @@ else
     echo -e "  ${RED}Cannot check lag — no leader found${NC}"
 fi
 
-# Barman backup status
+# Backup backup status
 echo ""
-echo -e "${YELLOW}=== Barman Backup Status ===${NC}"
+echo -e "${YELLOW}=== Backup Backup Status ===${NC}"
+BACKUP_TOOL=$(grep -E '^BACKUP_TOOL=' "$PROJECT_ROOT/.env" 2>/dev/null | cut -d= -f2); BACKUP_TOOL=${BACKUP_TOOL:-barman}
 for srv in "${DB_NODES[@]}"; do
-    BARMAN_CHECK=$(docker exec barman barman check "$srv" --nagios 2>/dev/null)
-    BARMAN_EXIT=$?
-    if [ $BARMAN_EXIT -eq 0 ]; then
-        echo -e "  ${GREEN}✓ $srv: OK${NC}"
-    elif [ $BARMAN_EXIT -eq 1 ]; then
-        echo -e "  ${YELLOW}⚠ $srv: WARNING — $BARMAN_CHECK${NC}"
+    if [ "$BACKUP_TOOL" = "pgbackrest" ]; then
+        OUT=$(docker exec backup pgbackrest info "$srv" 2>/dev/null | head -3)
+        [ -n "$OUT" ] && echo -e "  ${GREEN}✓ $srv (pgbackrest): ${OUT%%$'\n'*}${NC}"                       || echo -e "  ${RED}✗ $srv (pgbackrest): no repo info${NC}"
     else
-        echo -e "  ${RED}✗ $srv: CRITICAL — $BARMAN_CHECK${NC}"
+        BARMAN_CHECK=$(docker exec backup barman check "$srv" --nagios 2>/dev/null)
+        BARMAN_EXIT=$?
+        if [ $BARMAN_EXIT -eq 0 ]; then
+            echo -e "  ${GREEN}✓ $srv: OK${NC}"
+        elif [ $BARMAN_EXIT -eq 1 ]; then
+            echo -e "  ${YELLOW}⚠ $srv: WARNING — $BARMAN_CHECK${NC}"
+        else
+            echo -e "  ${RED}✗ $srv: CRITICAL — $BARMAN_CHECK${NC}"
+        fi
     fi
 done
 echo ""
@@ -293,8 +299,8 @@ check_key_permissions() {
     fi
 }
 
-# Check SSH keys for Patroni nodes (to connect to Barman)
-echo -e "${BLUE}  Patroni nodes SSH keys (for Barman access):${NC}"
+# Check SSH keys for Patroni nodes (to connect to Backup)
+echo -e "${BLUE}  Patroni nodes SSH keys (for Backup access):${NC}"
 for db in "${DB_NODES[@]}"; do
     if docker ps --format '{{.Names}}' | grep -q "^${db}$"; then
         # Get postgres home directory (usually /var/lib/postgresql)
@@ -307,8 +313,8 @@ for db in "${DB_NODES[@]}"; do
             ((SSH_KEY_ISSUES++))
         fi
         
-        # Alternative location: barman_rsa (backward compatibility, set up by entrypoint.sh)
-        check_key_permissions "$db" "$POSTGRES_HOME/.ssh/barman_rsa" "${db}: $POSTGRES_HOME/.ssh/barman_rsa (compat)" "postgres"
+        # Alternative location: backup_rsa (backward compatibility, set up by entrypoint.sh)
+        check_key_permissions "$db" "$POSTGRES_HOME/.ssh/backup_rsa" "${db}: $POSTGRES_HOME/.ssh/backup_rsa (compat)" "postgres"
         RET=$?
         if [ $RET -eq 1 ]; then
             ((SSH_KEY_ISSUES++))
@@ -326,57 +332,57 @@ for db in "${DB_NODES[@]}"; do
     fi
 done
 
-# Check SSH keys for Barman (to connect to Patroni nodes)
-echo -e "${BLUE}  Barman SSH keys (for Patroni access):${NC}"
-if docker ps --format '{{.Names}}' | grep -q "^barman$"; then
-    # Get Barman's actual home directory (usually /var/lib/barman)
-    BARMAN_HOME=$(docker exec barman getent passwd barman 2>/dev/null | cut -d: -f6 || echo "/var/lib/barman")
+# Check SSH keys for Backup (to connect to Patroni nodes)
+echo -e "${BLUE}  Backup SSH keys (for Patroni access):${NC}"
+if docker ps --format '{{.Names}}' | grep -q "^backup$"; then
+    # Get Backup's actual home directory (usually /var/lib/backup)
+    BARMAN_HOME=$(docker exec backup getent passwd backup 2>/dev/null | cut -d: -f6 || echo "/var/lib/backup")
     
     # Check primary location (actual home directory - set up by entrypoint.sh)
-    check_key_permissions "barman" "$BARMAN_HOME/.ssh/id_rsa" "barman: $BARMAN_HOME/.ssh/id_rsa (primary)" "barman"
+    check_key_permissions "backup" "$BARMAN_HOME/.ssh/id_rsa" "backup: $BARMAN_HOME/.ssh/id_rsa (primary)" "backup"
     RET=$?
     if [ $RET -eq 1 ]; then
         ((SSH_KEY_ISSUES++))
     fi
     
-    # Check alternative location (/home/barman) - optional, for loopback connections
+    # Check alternative location (/home/backup) - optional, for loopback connections
     # Only warn if it exists but has wrong permissions, not if it's missing
-    if docker exec barman test -f /home/barman/.ssh/id_rsa 2>/dev/null; then
-        check_key_permissions "barman" "/home/barman/.ssh/id_rsa" "barman: /home/barman/.ssh/id_rsa (optional)" "barman"
+    if docker exec backup test -f /home/backup/.ssh/id_rsa 2>/dev/null; then
+        check_key_permissions "backup" "/home/backup/.ssh/id_rsa" "backup: /home/backup/.ssh/id_rsa (optional)" "backup"
         RET=$?
         if [ $RET -eq 1 ]; then
             ((SSH_KEY_ISSUES++))
         fi
     fi
     
-    # Check .ssh directory permissions (check actual home and optional /home/barman if it exists)
-    for ssh_dir in "$BARMAN_HOME/.ssh" "/home/barman/.ssh"; do
-        if docker exec barman test -d "$ssh_dir" 2>/dev/null; then
-            DIR_PERMS=$(docker exec barman stat -c "%a" "$ssh_dir" 2>/dev/null || docker exec barman ls -ld "$ssh_dir" 2>/dev/null | awk '{print $1}' | cut -c1-10)
+    # Check .ssh directory permissions (check actual home and optional /home/backup if it exists)
+    for ssh_dir in "$BARMAN_HOME/.ssh" "/home/backup/.ssh"; do
+        if docker exec backup test -d "$ssh_dir" 2>/dev/null; then
+            DIR_PERMS=$(docker exec backup stat -c "%a" "$ssh_dir" 2>/dev/null || docker exec backup ls -ld "$ssh_dir" 2>/dev/null | awk '{print $1}' | cut -c1-10)
             if [ "$DIR_PERMS" != "700" ] && ! echo "$DIR_PERMS" | grep -q "^drwx------"; then
-                echo -e "${YELLOW}  ⚠ barman: $ssh_dir has wrong permissions: $DIR_PERMS (expected 700)${NC}"
+                echo -e "${YELLOW}  ⚠ backup: $ssh_dir has wrong permissions: $DIR_PERMS (expected 700)${NC}"
             fi
         fi
     done
 else
-    echo -e "${YELLOW}  ⚠ barman: Container not running${NC}"
+    echo -e "${YELLOW}  ⚠ backup: Container not running${NC}"
 fi
 
 # Check for PITR-specific scenarios
 echo -e "${BLUE}  PITR-specific key checks (for perform_pitr.sh):${NC}"
 for db in "${DB_NODES[@]}"; do
     if docker ps --format '{{.Names}}' | grep -q "^${db}$"; then
-        # Check if key exists in location perform_pitr.sh expects for barman-wal-restore
+        # Check if key exists in location perform_pitr.sh expects for backup-wal-restore
         POSTGRES_HOME=$(docker exec "$db" getent passwd postgres 2>/dev/null | cut -d: -f6 || echo "/var/lib/postgresql")
         
         # perform_pitr.sh checks these locations in order:
         # 1. $POSTGRES_HOME/.ssh/id_rsa (primary, set up by entrypoint.sh)
-        # 2. $POSTGRES_HOME/.ssh/barman_rsa (backward compatibility)
+        # 2. $POSTGRES_HOME/.ssh/backup_rsa (backward compatibility)
         # Note: All keys are now in the postgres user's actual home directory
         
         KEY_FOUND=false
         KEY_FOUND_WITH_GOOD_PERMS=false
-        for key_path in "$POSTGRES_HOME/.ssh/id_rsa" "$POSTGRES_HOME/.ssh/barman_rsa"; do
+        for key_path in "$POSTGRES_HOME/.ssh/id_rsa" "$POSTGRES_HOME/.ssh/backup_rsa"; do
             if docker exec "$db" test -f "$key_path" 2>/dev/null; then
                 KEY_FOUND=true
                 check_key_permissions "$db" "$key_path" "${db}: $key_path (PITR)" "postgres"
@@ -394,12 +400,12 @@ for db in "${DB_NODES[@]}"; do
             echo -e "${YELLOW}  ⚠ ${db}: No SSH key found in PITR-expected locations${NC}"
             echo -e "${CYAN}    perform_pitr.sh expects key at one of:${NC}"
             echo -e "${CYAN}    - $POSTGRES_HOME/.ssh/id_rsa (primary, set up by entrypoint.sh)${NC}"
-            echo -e "${CYAN}    - $POSTGRES_HOME/.ssh/barman_rsa (backward compatibility)${NC}"
-            echo -e "${CYAN}    Note: perform_pitr.sh will copy barman_rsa to id_rsa if needed and${NC}"
+            echo -e "${CYAN}    - $POSTGRES_HOME/.ssh/backup_rsa (backward compatibility)${NC}"
+            echo -e "${CYAN}    Note: perform_pitr.sh will copy backup_rsa to id_rsa if needed and${NC}"
             echo -e "${CYAN}    automatically set correct permissions (600 for key, 700 for .ssh directory)${NC}"
         elif [ "$KEY_FOUND_WITH_GOOD_PERMS" = "false" ]; then
             echo -e "${YELLOW}  ⚠ ${db}: SSH key found but has permission issues (PITR may fail)${NC}"
-            echo -e "${CYAN}    Error: 'barman@barman: Permission denied (publickey)' during recovery${NC}"
+            echo -e "${CYAN}    Error: 'backup@backup: Permission denied (publickey)' during recovery${NC}"
             echo -e "${CYAN}    Fix: Ensure key at $POSTGRES_HOME/.ssh/id_rsa has 600 permissions${NC}"
         fi
         
@@ -420,7 +426,7 @@ else
     echo -e "${YELLOW}⚠ SSH key permission issues detected: $SSH_KEY_ISSUES issue(s)${NC}"
     echo -e "${CYAN}  This may cause:${NC}"
     echo -e "${CYAN}    - WAL archiving failures${NC}"
-    echo -e "${CYAN}    - PITR recovery failures with: 'barman@barman: Permission denied (publickey)'${NC}"
+    echo -e "${CYAN}    - PITR recovery failures with: 'backup@backup: Permission denied (publickey)'${NC}"
     echo -e "${CYAN}    - Backup operation failures${NC}"
     echo ""
     echo -e "${CYAN}  To fix permissions, run inside container:${NC}"
@@ -429,10 +435,10 @@ else
     echo ""
     echo -e "${CYAN}  For Patroni nodes (as postgres user) - fixes PITR recovery:${NC}"
     echo -e "${CYAN}    docker exec <db> su - postgres -c 'mkdir -p ~/.ssh && chmod 700 ~/.ssh'${NC}"
-    echo -e "${CYAN}    docker exec <db> su - postgres -c 'cp /var/lib/postgresql/.ssh/barman_rsa ~/.ssh/id_rsa 2>/dev/null || true'${NC}"
+    echo -e "${CYAN}    docker exec <db> su - postgres -c 'cp /var/lib/postgresql/.ssh/backup_rsa ~/.ssh/id_rsa 2>/dev/null || true'${NC}"
     echo -e "${CYAN}    docker exec <db> su - postgres -c 'chmod 600 ~/.ssh/id_rsa'${NC}"
-    echo -e "${CYAN}  For Barman (as barman user):${NC}"
-    echo -e "${CYAN}    docker exec -u barman barman chmod 600 ~/.ssh/id_rsa && chmod 700 ~/.ssh${NC}"
+    echo -e "${CYAN}  For Backup (as backup user):${NC}"
+    echo -e "${CYAN}    docker exec -u backup backup chmod 600 ~/.ssh/id_rsa && chmod 700 ~/.ssh${NC}"
 fi
 echo ""
 
@@ -469,43 +475,43 @@ extract_ssh_error() {
     echo "$error_msg"
 }
 
-# Check SSH from Patroni nodes to Barman
+# Check SSH from Patroni nodes to Backup
 SSH_PATRONI_TO_BARMAN_SUCCESS=0
 SSH_PATRONI_TO_BARMAN_FAIL=0
-echo -e "${BLUE}  From Patroni nodes to Barman:${NC}"
+echo -e "${BLUE}  From Patroni nodes to Backup:${NC}"
 for db in "${DB_NODES[@]}"; do
     if docker ps --format '{{.Names}}' | grep -q "^${db}$"; then
         # Get postgres home directory for SSH key location
         POSTGRES_HOME=$(docker exec "$db" getent passwd postgres 2>/dev/null | cut -d: -f6 || echo "/var/lib/postgresql")
         
         # Check as postgres user
-        SSH_OUTPUT=$(docker exec ${db} su - postgres -c "ssh -i $POSTGRES_HOME/.ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 barman@barman 'echo SSH_SUCCESS' 2>&1" 2>&1)
+        SSH_OUTPUT=$(docker exec ${db} su - postgres -c "ssh -i $POSTGRES_HOME/.ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 backup@backup 'echo SSH_SUCCESS' 2>&1" 2>&1)
         SSH_EXIT_CODE=$?
         if [ $SSH_EXIT_CODE -eq 0 ]; then
-            echo -e "${GREEN}  ✓ ${db} (postgres) → barman: Connected${NC}"
+            echo -e "${GREEN}  ✓ ${db} (postgres) → backup: Connected${NC}"
             ((SSH_PATRONI_TO_BARMAN_SUCCESS++))
         else
             ERROR_MSG=$(extract_ssh_error "$SSH_OUTPUT")
             if [ -n "$ERROR_MSG" ]; then
-                echo -e "${RED}  ✗ ${db} (postgres) → barman: Failed${NC} ${YELLOW}(Error: ${ERROR_MSG})${NC}"
+                echo -e "${RED}  ✗ ${db} (postgres) → backup: Failed${NC} ${YELLOW}(Error: ${ERROR_MSG})${NC}"
             else
-                echo -e "${RED}  ✗ ${db} (postgres) → barman: Failed${NC}"
+                echo -e "${RED}  ✗ ${db} (postgres) → backup: Failed${NC}"
             fi
             ((SSH_PATRONI_TO_BARMAN_FAIL++))
         fi
         
         # Check as root user
-        SSH_OUTPUT=$(docker exec ${db} ssh -i /root/.ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 barman@barman 'echo SSH_SUCCESS' 2>&1)
+        SSH_OUTPUT=$(docker exec ${db} ssh -i /root/.ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 backup@backup 'echo SSH_SUCCESS' 2>&1)
         SSH_EXIT_CODE=$?
         if [ $SSH_EXIT_CODE -eq 0 ]; then
-            echo -e "${GREEN}  ✓ ${db} (root) → barman: Connected${NC}"
+            echo -e "${GREEN}  ✓ ${db} (root) → backup: Connected${NC}"
             ((SSH_PATRONI_TO_BARMAN_SUCCESS++))
         else
             ERROR_MSG=$(extract_ssh_error "$SSH_OUTPUT")
             if [ -n "$ERROR_MSG" ]; then
-                echo -e "${RED}  ✗ ${db} (root) → barman: Failed${NC} ${YELLOW}(Error: ${ERROR_MSG})${NC}"
+                echo -e "${RED}  ✗ ${db} (root) → backup: Failed${NC} ${YELLOW}(Error: ${ERROR_MSG})${NC}"
             else
-                echo -e "${RED}  ✗ ${db} (root) → barman: Failed${NC}"
+                echo -e "${RED}  ✗ ${db} (root) → backup: Failed${NC}"
             fi
             ((SSH_PATRONI_TO_BARMAN_FAIL++))
         fi
@@ -515,44 +521,44 @@ for db in "${DB_NODES[@]}"; do
     fi
 done
 
-# Check SSH from Barman to Patroni nodes
+# Check SSH from Backup to Patroni nodes
 SSH_BARMAN_TO_PATRONI_SUCCESS=0
 SSH_BARMAN_TO_PATRONI_FAIL=0
-echo -e "${BLUE}  From Barman to Patroni nodes:${NC}"
-if docker ps --format '{{.Names}}' | grep -q "^barman$"; then
-    # Get Barman's home directory
-    BARMAN_HOME=$(docker exec barman getent passwd barman 2>/dev/null | cut -d: -f6 || echo "/var/lib/barman")
+echo -e "${BLUE}  From Backup to Patroni nodes:${NC}"
+if docker ps --format '{{.Names}}' | grep -q "^backup$"; then
+    # Get Backup's home directory
+    BARMAN_HOME=$(docker exec backup getent passwd backup 2>/dev/null | cut -d: -f6 || echo "/var/lib/backup")
     
     for db in "${DB_NODES[@]}"; do
         if docker ps --format '{{.Names}}' | grep -q "^${db}$"; then
-            # Check as barman user
-            SSH_OUTPUT=$(docker exec -u barman barman ssh -i "$BARMAN_HOME/.ssh/id_rsa" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o ServerAliveInterval=2 -o ServerAliveCountMax=3 postgres@${db} 'echo SSH_SUCCESS' 2>&1)
+            # Check as backup user
+            SSH_OUTPUT=$(docker exec -u backup backup ssh -i "$BARMAN_HOME/.ssh/id_rsa" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o ServerAliveInterval=2 -o ServerAliveCountMax=3 postgres@${db} 'echo SSH_SUCCESS' 2>&1)
             SSH_EXIT_CODE=$?
             if [ $SSH_EXIT_CODE -eq 0 ]; then
-                echo -e "${GREEN}  ✓ barman (barman) → ${db}: Connected${NC}"
+                echo -e "${GREEN}  ✓ backup (backup) → ${db}: Connected${NC}"
                 ((SSH_BARMAN_TO_PATRONI_SUCCESS++))
             else
                 ERROR_MSG=$(extract_ssh_error "$SSH_OUTPUT")
                 if [ -n "$ERROR_MSG" ]; then
-                    echo -e "${RED}  ✗ barman (barman) → ${db}: Failed${NC} ${YELLOW}(Error: ${ERROR_MSG})${NC}"
+                    echo -e "${RED}  ✗ backup (backup) → ${db}: Failed${NC} ${YELLOW}(Error: ${ERROR_MSG})${NC}"
                 else
-                    echo -e "${RED}  ✗ barman (barman) → ${db}: Failed${NC}"
+                    echo -e "${RED}  ✗ backup (backup) → ${db}: Failed${NC}"
                 fi
                 ((SSH_BARMAN_TO_PATRONI_FAIL++))
             fi
             
             # Check as root user
-            SSH_OUTPUT=$(docker exec barman ssh -i /root/.ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o ServerAliveInterval=2 -o ServerAliveCountMax=3 postgres@${db} 'echo SSH_SUCCESS' 2>&1)
+            SSH_OUTPUT=$(docker exec backup ssh -i /root/.ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o ServerAliveInterval=2 -o ServerAliveCountMax=3 postgres@${db} 'echo SSH_SUCCESS' 2>&1)
             SSH_EXIT_CODE=$?
             if [ $SSH_EXIT_CODE -eq 0 ]; then
-                echo -e "${GREEN}  ✓ barman (root) → ${db}: Connected${NC}"
+                echo -e "${GREEN}  ✓ backup (root) → ${db}: Connected${NC}"
                 ((SSH_BARMAN_TO_PATRONI_SUCCESS++))
             else
                 ERROR_MSG=$(extract_ssh_error "$SSH_OUTPUT")
                 if [ -n "$ERROR_MSG" ]; then
-                    echo -e "${RED}  ✗ barman (root) → ${db}: Failed${NC} ${YELLOW}(Error: ${ERROR_MSG})${NC}"
+                    echo -e "${RED}  ✗ backup (root) → ${db}: Failed${NC} ${YELLOW}(Error: ${ERROR_MSG})${NC}"
                 else
-                    echo -e "${RED}  ✗ barman (root) → ${db}: Failed${NC}"
+                    echo -e "${RED}  ✗ backup (root) → ${db}: Failed${NC}"
                 fi
                 ((SSH_BARMAN_TO_PATRONI_FAIL++))
             fi
@@ -562,7 +568,7 @@ if docker ps --format '{{.Names}}' | grep -q "^barman$"; then
         fi
     done
 else
-    echo -e "${YELLOW}  ⚠ barman: Container not running${NC}"
+    echo -e "${YELLOW}  ⚠ backup: Container not running${NC}"
     SSH_BARMAN_TO_PATRONI_FAIL=8
 fi
 

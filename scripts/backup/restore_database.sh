@@ -752,7 +752,7 @@ run_pg_restore_with_progress() {
             if [ "$age" -gt "$stall_threshold" ]; then
                 printf "\n${YELLOW}⚠ pg_restore appears stalled — no new TOC item for ${age}s${NC}\n" >&2
                 printf "${YELLOW}  Common causes: PgBouncer pool exhaustion, network hang, lock wait, slow disk on remote.${NC}\n" >&2
-                printf "${YELLOW}  Check: docker logs barman / pg_stat_activity on the target / network to ${PG_HOST}.${NC}\n" >&2
+                printf "${YELLOW}  Check: docker logs backup / pg_stat_activity on the target / network to ${PG_HOST}.${NC}\n" >&2
                 touch "$hb"   # reset so we don't spam every 30s
             fi
         done

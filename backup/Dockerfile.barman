@@ -3,9 +3,9 @@
 ARG POSTGRES_VERSION=18
 FROM docker.io/library/postgres:${POSTGRES_VERSION}
 
-# Install Barman, PostgreSQL client, supervisor, and pgBadger
+# Install Backup, PostgreSQL client, supervisor, and pgBadger
 RUN apt-get update && apt-get install -y \
-    barman \
+    backup \
     postgresql-client \
     openssh-server \
     openssh-client \
@@ -16,10 +16,10 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Configure SSH for key-based access (for archive_command)
-RUN mkdir -p /var/run/sshd /home/barman/.ssh && \
+RUN mkdir -p /var/run/sshd /home/backup/.ssh && \
     ssh-keygen -A && \
-    chmod 700 /home/barman/.ssh && \
-    chown -R barman:barman /home/barman/.ssh
+    chmod 700 /home/backup/.ssh && \
+    chown -R backup:backup /home/backup/.ssh
 
 # SSH configuration
 RUN echo "PermitRootLogin no" >> /etc/ssh/sshd_config && \
@@ -29,16 +29,16 @@ RUN echo "PermitRootLogin no" >> /etc/ssh/sshd_config && \
     echo "StrictModes no" >> /etc/ssh/sshd_config && \
     echo "LogLevel INFO" >> /etc/ssh/sshd_config
 
-# Create Barman directories and pgBadger reports directory
-RUN mkdir -p /var/lib/barman /var/log/barman /etc/barman.d /data/pg-backup /var/lib/barman/pgbadger-reports
+# Create Backup directories and pgBadger reports directory
+RUN mkdir -p /var/lib/backup /var/log/backup /etc/backup.d /data/pg-backup /var/lib/backup/pgbadger-reports
 
-# Create barman user if it doesn't exist
-RUN useradd -m -s /bin/bash barman || true
+# Create backup user if it doesn't exist
+RUN useradd -m -s /bin/bash backup || true
 
 # Set permissions
-RUN chown -R barman:barman /var/lib/barman /var/log/barman /data/pg-backup /var/lib/barman/pgbadger-reports
+RUN chown -R backup:backup /var/lib/backup /var/log/backup /data/pg-backup /var/lib/backup/pgbadger-reports
 
-# Expose PostgreSQL port (for barman streaming)
+# Expose PostgreSQL port (for backup streaming)
 EXPOSE 5432
 
 # Create supervisor directory

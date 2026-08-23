@@ -11,8 +11,19 @@
 
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"   # pwd -P: TMPDIR may carry '//'
 ENV_FILE="$ROOT/.env"
+
+resolve_outside_bin() {
+    local name="$1" p dir real
+    while read -r p; do
+        dir="$(cd "$(dirname "$p")" && pwd -P)" || continue
+        real="$dir/$(basename "$p")"
+        case "$real" in "$ROOT/bin/"*) continue ;; esac   # never target our own shims
+        [ -x "$real" ] && { printf '%s' "$real"; return 0; }
+    done < <(type -a "$name" 2>/dev/null | awk '{print $NF}')
+    return 1
+}
 
 ENGINE="docker"
 if [ -f "$ENV_FILE" ]; then
@@ -32,16 +43,6 @@ if [ "$ENGINE" = "docker" ]; then
     # `docker` living earlier in PATH than the real binary would otherwise
     # recurse into itself.
     #
-    # NEVER record a target inside $ROOT/bin — that would be a shim pointing
-    # at a shim (infinite exec loop). Resolve past our own shims.
-    resolve_outside_bin() {
-        local name="$1" p
-        while read -r p; do
-            case "$p" in "$ROOT/bin/"*) continue ;; esac
-            [ -x "$p" ] && { printf '%s' "$p"; return 0; }
-        done < <(type -a "$name" 2>/dev/null | awk '{print $NF}')
-        return 1
-    }
     DOCKER_BIN="$(resolve_outside_bin docker)" || {
         echo "CONTAINER_ENGINE=docker but no docker CLI found outside bin/" >&2
         exit 1

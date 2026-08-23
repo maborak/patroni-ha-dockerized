@@ -34,7 +34,7 @@ fail() { echo "  FAIL: $1"; shift; for ctx in "$@"; do echo "$ctx" | sed 's/^/  
 # ============================================================================
 cp -R "$ROOT/scripts" "$SANDBOX/scripts"
 cp -R "$ROOT/templates" "$SANDBOX/templates"
-mkdir -p "$SANDBOX/configs" "$SANDBOX/barman" "$SANDBOX/bin"
+mkdir -p "$SANDBOX/configs" "$SANDBOX/backup" "$SANDBOX/bin"
 
 # common.sh's _find_project_root needs a docker-compose.yml next to .env
 printf 'services: {}\n' > "$SANDBOX/docker-compose.yml"
@@ -110,10 +110,23 @@ WIZARD_LOG="$SANDBOX/wizard_output.log"
 # default database, ports (y), software versions ×6, apply (y).
 # Passwords are auto-skipped because .env carries real ones.
 set +e
-printf '%s\n%s\n\n\n\n\n\n\n\n\n\n\n\n' "$NEW_CLUSTER" "$NEW_REPLICAS" \
-    | WIZARD_ALLOW_PIPED=1 PATH="$SANDBOX/bin:$PATH" \
+# Answers: cluster, replicas, admin, database, ports-y, backup-tool(default),
+# versions x6, apply-y. (Wizard may regenerate bin/ shims mid-run; stubs are
+# restored right after so later assertions stay isolated.)
+printf '%s\n' "$NEW_CLUSTER" "$NEW_REPLICAS" "" "" "y" "" \
+        "" "" "" "" "" "" "y" \
+    | WIZARD_ALLOW_PIPED=1 WIZARD_SKIP_SHIMS=1 PATH="$SANDBOX/bin:$PATH" \
       bash "$SANDBOX/scripts/utils/wizard.sh" > "$WIZARD_LOG" 2>&1
 WIZARD_RC=$?
+if [ "$WIZARD_RC" -ne 0 ]; then
+    echo "── wizard failed; output:"
+    tail -25 "$WIZARD_LOG" || true
+fi
+# Restore isolation stubs (wizard's engine selection may have replaced them
+# with pass-through shims pointing at the developer's real docker).
+printf '#!/bin/sh\nexit 0\n' > "$SANDBOX/bin/docker"
+printf '#!/bin/sh\nexit 0\n' > "$SANDBOX/bin/docker-compose"
+chmod +x "$SANDBOX/bin/docker" "$SANDBOX/bin/docker-compose"
 set -e
 
 echo ""
@@ -174,10 +187,10 @@ HAPROXY_SERVERS=$(grep -cE '^    server db[0-9]+ ' "$SANDBOX/configs/haproxy.cfg
     || fail "haproxy.cfg has $HAPROXY_SERVERS server lines, expected 10 (5 write + 5 read)" \
         "$(grep -nE '^    server db' "$SANDBOX/configs/haproxy.cfg")"
 
-grep -q '^\[db5\]' "$SANDBOX/configs/barman.conf" \
-    && pass "barman.conf has [db5] section" \
-    || fail "barman.conf missing [db5] section" \
-        "$(grep -n '^\[db' "$SANDBOX/configs/barman.conf")"
+grep -q '^\[db5\]' "$SANDBOX/configs/backup.conf" \
+    && pass "backup.conf has [db5] section" \
+    || fail "backup.conf missing [db5] section" \
+        "$(grep -n '^\[db' "$SANDBOX/configs/backup.conf")"
 
 grep -q '^PATRONI_DB5_PORT=15435$' "$SANDBOX/.env.example" \
     && pass ".env.example regenerated with PATRONI_DB5_PORT" \

@@ -1,6 +1,6 @@
 # Scripts Directory Documentation
 
-Operational tooling for the Patroni HA + Barman stack, organized by purpose.
+Operational tooling for the Patroni HA + Backup stack, organized by purpose.
 
 ## Directory Structure
 
@@ -17,7 +17,7 @@ scripts/
 │   ├── scale_cluster.sh       # Powers `make scale` (grow/shrink members)
 │   ├── switchover_to_remote.sh
 │   └── switchover_from_remote.sh
-├── backup/                    # Barman / backup tasks
+├── backup/                    # Backup / backup tasks
 │   ├── check_archive_command.sh
 │   ├── dump_database.sh
 │   ├── restore_database.sh
@@ -41,9 +41,9 @@ scripts/
 │   ├── check_deps.sh          # Dependency preflight (`make doctor`, wizard step 1; docker/podman aware)
 │   ├── show_versions.sh       # Powers `make versions` (configured vs supported)
 │   ├── running_versions.sh    # Versions block of `make status` (probed from containers)
-│   ├── test_ssh_to_barman.sh
-│   ├── test_barman_ssh_to_patroni.sh
-│   ├── test_barman_postgres_connectivity.sh
+│   ├── test_ssh_to_backup.sh
+│   ├── test_backup_ssh_to_patroni.sh
+│   ├── test_backup_postgres_connectivity.sh
 │   └── wizard.sh              # Guided setup wizard (powers `make wizard`)
 └── testing/                   # Testing & stress testing
     ├── smoke_test_wizard.sh   # Powers `make smoke-test`
@@ -89,15 +89,15 @@ Interactive step-by-step setup wizard: configure → review values → confirm �
 
 #### `setup_ssh_keys.sh` — `make setup-keys`
 
-Generates the SSH keypair used for Patroni ↔ Barman communication into `ssh_keys/` (mounted into containers via `docker-compose.yml`). One-time setup; also runs automatically before config generation.
+Generates the SSH keypair used for Patroni ↔ Backup communication into `ssh_keys/` (mounted into containers via `docker-compose.yml`). One-time setup; also runs automatically before config generation.
 
-#### `test_ssh_to_barman.sh` / `test_barman_ssh_to_patroni.sh` — `make test-ssh`
+#### `test_ssh_to_backup.sh` / `test_backup_ssh_to_patroni.sh` — `make test-ssh`
 
-Verify SSH connectivity in both directions (all nodes → Barman, and Barman → all nodes). Use after startup or when WAL archiving/backups fail.
+Verify SSH connectivity in both directions (all nodes → Backup, and Backup → all nodes). Use after startup or when WAL archiving/backups fail.
 
-#### `test_barman_postgres_connectivity.sh` — `make test-connectivity`
+#### `test_backup_postgres_connectivity.sh` — `make test-connectivity`
 
-Verifies Barman can reach PostgreSQL on all Patroni nodes (required for backups).
+Verifies Backup can reach PostgreSQL on all Patroni nodes (required for backups).
 
 ---
 
@@ -156,7 +156,7 @@ Comprehensive stack health check (`--human` or `--json`): container status, Patr
 
 #### `disk_usage.sh` — `make disk`
 
-Disk usage report and targeted cleanup (`make disk CLEANUP=logs|dumps|docker|snapshots|temp|barman|all [KEEP_DAYS=N] [DRYRUN=1]`, or `make disk FORMAT=json`).
+Disk usage report and targeted cleanup (`make disk CLEANUP=logs|dumps|docker|snapshots|temp|backup|all [KEEP_DAYS=N] [DRYRUN=1]`, or `make disk FORMAT=json`).
 
 #### `list_databases.sh` — `make list-dbs`
 
@@ -168,7 +168,7 @@ Counts tables, rows, and database sizes. Useful for verifying data after PITR or
 
 #### `pg_activity_monitor.sh` — `make activity`
 
-Real-time activity monitoring via `pg_activity`. ⚠️ Requires `pg_activity` to be installed in the barman container (not currently in the Dockerfile).
+Real-time activity monitoring via `pg_activity`. ⚠️ Requires `pg_activity` to be installed in the backup container (not currently in the Dockerfile).
 
 #### `pg_stat_statements_query.sh` — `make slow-queries`
 
@@ -180,7 +180,7 @@ Monitors `ANALYZE` progress in real time. Use during large statistics updates.
 
 #### `pgmetrics_collect.sh`
 
-Collects metrics with `pgmetrics`. ⚠️ Requires `pgmetrics` to be installed in the barman container (not currently in the Dockerfile).
+Collects metrics with `pgmetrics`. ⚠️ Requires `pgmetrics` to be installed in the backup container (not currently in the Dockerfile).
 
 ---
 
@@ -212,7 +212,7 @@ Cross-cluster switchover, remote → local (reverse direction). Same flags as ab
 
 #### `scale_cluster.sh` — `make scale`
 
-Grow or shrink the cluster to N replicas (+1 leader). Grow: regenerates configs, joins new nodes as replicas, rebuilds the Barman image (its backup loop is baked in), waits until all members are running/streaming. Shrink: switches the leader over first if it would be removed, then — after typed confirmation (`SCALE`) or `YES=1` — deletes removed nodes' containers, data/log volumes and Barman server data. Also supports `DRY_RUN=1`, `SKIP_WAIT=1`, `TIMEOUT=<secs>`. See the "Scaling the Cluster" runbook in `docs/runbooks.md`.
+Grow or shrink the cluster to N replicas (+1 leader). Grow: regenerates configs, joins new nodes as replicas, rebuilds the Backup image (its backup loop is baked in), waits until all members are running/streaming. Shrink: switches the leader over first if it would be removed, then — after typed confirmation (`SCALE`) or `YES=1` — deletes removed nodes' containers, data/log volumes and Backup server data. Also supports `DRY_RUN=1`, `SKIP_WAIT=1`, `TIMEOUT=<secs>`. See the "Scaling the Cluster" runbook in `docs/runbooks.md`.
 
 #### `rebootstrap.sh` — `make rebootstrap`
 
@@ -248,7 +248,7 @@ bash scripts/testing/cleanup_stress_test.sh
 ### Referenced from outside `scripts/`
 
 - `patroni/create_databases.sh` — creates the default database during Patroni bootstrap. Not called directly; built into the Patroni image at `/etc/patroni/create_databases.sh` and wired via `post_bootstrap` in `configs/patroni*.yml`. Database name comes from `DEFAULT_DATABASE`.
-- `patroni/archive-wal.sh` — WAL archiving delegate baked into the Patroni image (`/usr/local/bin/archive-wal.sh`); `archive_command` in `templates/patroni.yml.tpl` calls it as `%p %f`. Exists because PG18 rejects literal `%` placeholders in `archive_command` (date formats are impossible inline) and because strict failure semantics + dedicated logging belong in a script, not a YAML one-liner. Ships each node's WAL to `barman:/data/pg-backup/<node>/incoming/` and self-heals the remote directory.
+- `patroni/archive-wal.sh` — WAL archiving delegate baked into the Patroni image (`/usr/local/bin/archive-wal.sh`); `archive_command` in `templates/patroni.yml.tpl` calls it as `%p %f`. Exists because PG18 rejects literal `%` placeholders in `archive_command` (date formats are impossible inline) and because strict failure semantics + dedicated logging belong in a script, not a YAML one-liner. Ships each node's WAL to `backup:/data/pg-backup/<node>/incoming/` and self-heals the remote directory.
 
 ---
 

@@ -9,7 +9,7 @@
 # Shrink: removes the highest-numbered nodes. If the current leader is among
 #         them, a switchover to a surviving node is performed first. After
 #         `compose up` prunes the orphaned containers, their data/log volumes
-#         and Barman server data are deleted (irreversible — type-to-confirm).
+#         and Backup server data are deleted (irreversible — type-to-confirm).
 #
 # Usage:
 #   bash scripts/ops/scale_cluster.sh --replicas 5 [--yes] [--dry-run]
@@ -93,9 +93,9 @@ on_exit() {
                 echo ".env was updated but compose changes may be partial." >&2
                 echo "Retry with: make scale REPLICAS=<n>" >&2
                 ;;
-            volumes|barman-cleanup)
+            volumes|backup-cleanup)
                 echo "Containers/volumes may be partially removed." >&2
-                echo "Check: make status · docker volume ls | grep db · docker exec barman ls /var/lib/barman" >&2
+                echo "Check: make status · docker volume ls | grep db · docker exec backup ls /var/lib/backup" >&2
                 ;;
             wait-healthy)
                 echo "Scale applied but cluster did not become healthy within ${TIMEOUT}s." >&2
@@ -178,13 +178,17 @@ if [ "$MODE" = "shrink" ]; then
     for n in $REMOVED_NODES; do
         VOLUMES_TO_DELETE="${VOLUMES_TO_DELETE}\n    ✗ volume ${n}_data (PostgreSQL data — DELETED)"
         VOLUMES_TO_DELETE="${VOLUMES_TO_DELETE}\n    ✗ volume ${n}_logs (JSON logs — DELETED)"
-        BARMAN_DIRS_TO_DELETE="${BARMAN_DIRS_TO_DELETE} /var/lib/barman/$n /data/pg-backup/$n"
+        if [ "${BACKUP_TOOL:-barman}" = "pgbackrest" ]; then
+            BARMAN_DIRS_TO_DELETE="${BARMAN_DIRS_TO_DELETE} /var/lib/pgbackrest/backup/$n"
+        else
+            BARMAN_DIRS_TO_DELETE="${BARMAN_DIRS_TO_DELETE} /var/lib/backup/$n /data/pg-backup/$n"
+        fi
     done
     echo -e "  Removing nodes:${REMOVED_NODES}" >&2
     echo -e "${YELLOW}  Data loss summary:${NC}" >&2
     echo -e "    ✗ containers:${REMOVED_NODES}" >&2
     echo -e "$VOLUMES_TO_DELETE" >&2
-    echo -e "    ✗ Barman backups/WAL for these servers (see cleanup below)" >&2
+    echo -e "    ✗ Backup backups/WAL for these servers (see cleanup below)" >&2
     if echo " $REMOVED_NODES " | grep -q " ${CURRENT_LEADER} "; then
         echo -e "${YELLOW}    ⚠ ${CURRENT_LEADER} is the CURRENT LEADER — a switchover will be performed first.${NC}" >&2
     fi
@@ -201,7 +205,7 @@ if [ "$DRY_RUN" = "1" ]; then
         echo "  2. (if leader is removed) patronictl switchover --candidate <survivor>" >&2
         echo "  3. $DOCKER_COMPOSE up -d --remove-orphans      # prunes orphaned db containers" >&2
         echo "  4. docker volume rm <project>_db<N>_data <project>_db<N>_logs   # per removed node" >&2
-        echo "  5. docker exec barman rm -rf$BARMAN_DIRS_TO_DELETE" >&2
+        echo "  5. docker exec backup rm -rf$BARMAN_DIRS_TO_DELETE" >&2
     else
         echo "  2. $DOCKER_COMPOSE up -d --remove-orphans" >&2
         echo "  3. wait until all ${TARGET_NODES} members are running/streaming (timeout ${TIMEOUT}s)" >&2
@@ -261,7 +265,7 @@ if [ "$MODE" = "shrink" ]; then
     if [ "$YES" != "1" ]; then
         echo "" >&2
         echo -e "${RED}${BOLD}WARNING: shrinking deletes ALL data of:${NC}${REMOVED_NODES}" >&2
-        echo "  - containers, data + log volumes, Barman backups & WAL archives" >&2
+        echo "  - containers, data + log volumes, Backup backups & WAL archives" >&2
         echo "  There is NO undo. Save data first if needed (make backup / make dump-db)." >&2
         printf "%bType exactly 'SCALE' to confirm:%b " "${YELLOW}${BOLD}" "${NC}" >&2
         read -r answer
@@ -296,19 +300,19 @@ step "Applying compose changes"
 # shellcheck disable=SC2086
 $DOCKER_COMPOSE up -d --remove-orphans
 
-# barman/supervisord.conf (with the per-server backup loop) is COPYd into the
-# barman image at build time — rebuild so the loop covers the new node set.
+# backup/supervisord.conf (with the per-server backup loop) is COPYd into the
+# backup image at build time — rebuild so the loop covers the new node set.
 if [ "$MODE" = "grow" ]; then
-    log "Rebuilding barman image so its backup loop covers the new nodes..."
+    log "Rebuilding backup image so its backup loop covers the new nodes..."
     # shellcheck disable=SC2086
-    $DOCKER_COMPOSE build barman >/dev/null
+    $DOCKER_COMPOSE build backup >/dev/null
     # shellcheck disable=SC2086
-    $DOCKER_COMPOSE up -d barman
+    $DOCKER_COMPOSE up -d backup
 fi
 
 # ----------------------------------------------------------------------------
-# Shrink cleanup: volumes + Barman server data (AFTER compose re-created
-# haproxy/pgbadger/barman without the removed mounts)
+# Shrink cleanup: volumes + Backup server data (AFTER compose re-created
+# haproxy/pgbadger/backup without the removed mounts)
 # ----------------------------------------------------------------------------
 SCRIPT_PHASE="volumes"
 if [ "$MODE" = "shrink" ]; then
@@ -327,16 +331,16 @@ if [ "$MODE" = "shrink" ]; then
         done
     done
 
-    SCRIPT_PHASE="barman-cleanup"
-    step "Cleaning Barman data for removed nodes"
+    SCRIPT_PHASE="backup-cleanup"
+    step "Cleaning Backup data for removed nodes"
     # capture first, then grep: under `pipefail`, `cmd | grep -q` can fail
     # via SIGPIPE when grep exits before the producer finishes writing
     RUNNING_CONTAINERS=$(docker ps --format '{{.Names}}' 2>/dev/null || true)
-    if echo "$RUNNING_CONTAINERS" | grep -q '^barman$'; then
+    if echo "$RUNNING_CONTAINERS" | grep -q '^backup$'; then
         # shellcheck disable=SC2086
-        docker exec barman sh -c "rm -rf$BARMAN_DIRS_TO_DELETE" && ok "Barman server data cleaned"
+        docker exec backup sh -c "rm -rf$BARMAN_DIRS_TO_DELETE" && ok "Backup server data cleaned"
     else
-        warn "barman container not running — clean manually: docker exec barman rm -rf$BARMAN_DIRS_TO_DELETE"
+        warn "backup container not running — clean manually: docker exec backup rm -rf$BARMAN_DIRS_TO_DELETE"
     fi
 fi
 
@@ -399,5 +403,5 @@ docker exec db1 patronictl -c /etc/patroni/patroni.yml list 2>/dev/null || true
 echo "" >&2
 echo "  Verify: make status · make check" >&2
 if [ "$MODE" = "grow" ]; then
-    echo "  New nodes stream from the leader; first Barman backup happens on schedule." >&2
+    echo "  New nodes stream from the leader; first Backup backup happens on schedule." >&2
 fi

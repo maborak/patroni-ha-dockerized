@@ -44,7 +44,7 @@ Implements docs/switchover.md Section A end-to-end.
 Options:
   --yes          Skip all interactive confirmations (still respects --dry-run)
   --dry-run      Print every mutating command without executing it
-  --skip-backup  Skip the pre-switch Barman backup recommendation
+  --skip-backup  Skip the pre-switch Backup backup recommendation
   -h, --help     Show this help
 
 Env (override via .env):
@@ -147,7 +147,7 @@ ok "Preflight passed"
 # Phase 1 — Backup recommendation
 # ============================================================================
 if [ "$SKIP_BACKUP" -ne 1 ]; then
-    step "Phase 1 — Pre-switch Barman backup (recommended)"
+    step "Phase 1 — Pre-switch Backup backup (recommended)"
     if [ "${DRY_RUN:-0}" = "1" ]; then
         log "[DRY-RUN] Would prompt to run 'make backup SERVER=db1'"
     else

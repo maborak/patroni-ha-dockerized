@@ -11,10 +11,10 @@ configs/userlist.txt
 
 # Generated artifacts (rebuild with `make generate`; they encode your live topology)
 configs/haproxy.cfg
-configs/barman.conf
+configs/backup.conf
 configs/pgbouncer.ini
 configs/pgbouncer-ro.ini
-barman/supervisord.conf
+backup/supervisord.conf
 docker-compose.yml
 
 # Python cache & bytecode
@@ -54,3 +54,5 @@ mybk/
 
 # Engine shims (generated from CONTAINER_ENGINE)
 /bin/
+configs/pgbackrest.conf
+configs/pgbackrest-repo.conf

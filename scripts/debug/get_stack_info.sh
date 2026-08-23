@@ -205,7 +205,7 @@ check_etcd_health() {
 # Initialize status tracking
 STACK_HEALTHY=true
 CONTAINERS_RUNNING=0
-CONTAINERS_TOTAL=$((PATRONI_NODES + 4))  # db nodes + etcd1 + etcd2 + haproxy + barman
+CONTAINERS_TOTAL=$((PATRONI_NODES + 4))  # db nodes + etcd1 + etcd2 + haproxy + backup
 
 # Calculate total checks for progress
 PROGRESS_TOTAL=$((CONTAINERS_TOTAL + PATRONI_NODES + 2))  # containers + roles + 2 etcd health
@@ -268,13 +268,13 @@ else
     print_status "haproxy is not running" "fail"
 fi
 
-print_progress "Checking barman container" "$CYAN"
-if is_container_running "barman"; then
+print_progress "Checking backup container" "$CYAN"
+if is_container_running "backup"; then
     BARMAN_RUNNING=true
     ((CONTAINERS_RUNNING++))
-    print_status "barman is running" "ok"
+    print_status "backup is running" "ok"
 else
-    print_status "barman is not running" "fail"
+    print_status "backup is not running" "fail"
 fi
 
 # Get Patroni roles (API port is 8001 inside container)
@@ -460,20 +460,20 @@ $(_build_patroni_nodes_json)
     "cluster_endpoints": "http://localhost:${ETCD1_CLIENT_PORT},http://localhost:${ETCD2_CLIENT_PORT}",
     "internal_endpoints": "http://etcd1:2379,http://etcd2:2379"
   },
-  "barman": {
+  "backup": {
     "host": "localhost",
     "port": $BARMAN_PORT,
-    "connection_string": "postgresql://barman@localhost:${BARMAN_PORT}/barman",
-    "internal_host": "barman",
+    "connection_string": "postgresql://backup@localhost:${BARMAN_PORT}/backup",
+    "internal_host": "backup",
     "internal_port": 5432,
     "running": $BARMAN_RUNNING,
     "credentials": {
-      "username": "barman",
-      "note": "Barman uses SSH for WAL archiving, not direct PostgreSQL connections"
+      "username": "backup",
+      "note": "Backup uses SSH for WAL archiving, not direct PostgreSQL connections"
     },
     "ssh_access": {
       "note": "SSH keys are required for WAL archiving from Patroni nodes",
-      "key_location": "./ssh_keys/barman_rsa"
+      "key_location": "./ssh_keys/backup_rsa"
     }
   },
   "application_usage": {
@@ -509,7 +509,7 @@ $(_build_patroni_nodes_json)
 $(_build_patroni_logs_json)
       },
       "haproxy": "$DOCKER_COMPOSE logs -f haproxy",
-      "barman": "$DOCKER_COMPOSE logs -f barman",
+      "backup": "$DOCKER_COMPOSE logs -f backup",
       "etcd": {
         "etcd1": "$DOCKER_COMPOSE logs -f etcd1",
         "etcd2": "$DOCKER_COMPOSE logs -f etcd2",
@@ -521,7 +521,7 @@ $(_build_json_logs_json)
       "archive_logs": {
 $(_build_archive_logs_json)
       },
-      "barman_logs": "docker exec -it barman tail -f /var/log/barman/barman.log"
+      "barman_logs": "docker exec -it backup tail -f /var/log/backup/backup.log"
     }
   }
 }
@@ -597,12 +597,12 @@ else
     echo "  http://localhost:${ETCD1_CLIENT_PORT},http://localhost:${ETCD2_CLIENT_PORT}"
     echo ""
     echo "------------------------------------------"
-    echo "Barman (Backup Server)"
+    echo "Backup (Backup Server)"
     echo "------------------------------------------"
     echo "Host: localhost"
     echo "Port: $BARMAN_PORT"
     echo "Status: $([ "$BARMAN_RUNNING" = true ] && echo "Running" || echo "Not Running")"
-    echo "Note: Barman uses SSH for WAL archiving, not direct PostgreSQL connections"
+    echo "Note: Backup uses SSH for WAL archiving, not direct PostgreSQL connections"
     echo ""
     echo "------------------------------------------"
     echo "Viewing Logs"
@@ -628,12 +628,12 @@ else
     echo "  # Follow HAProxy logs"
     echo "  $DOCKER_COMPOSE logs -f haproxy"
     echo ""
-    echo -e "${CYAN}${BOLD}Barman:${NC}"
-    echo "  # Follow Barman logs"
-    echo "  $DOCKER_COMPOSE logs -f barman"
+    echo -e "${CYAN}${BOLD}Backup:${NC}"
+    echo "  # Follow Backup logs"
+    echo "  $DOCKER_COMPOSE logs -f backup"
     echo ""
-    echo "  # Follow Barman internal log"
-    echo "  docker exec -it barman tail -f /var/log/barman/barman.log"
+    echo "  # Follow Backup internal log"
+    echo "  docker exec -it backup tail -f /var/log/backup/backup.log"
     echo ""
     echo -e "${CYAN}${BOLD}etcd:${NC}"
     echo "  # Follow etcd1 logs"

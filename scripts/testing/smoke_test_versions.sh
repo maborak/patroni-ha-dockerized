@@ -31,7 +31,7 @@ make_sandbox() {
     sb="$(mktemp -d "${TMPDIR_BASE}/patroni_smoke_ver.XXXXXX")"
     cp -R "$ROOT/scripts" "$sb/scripts"
     cp -R "$ROOT/templates" "$sb/templates"
-    mkdir -p "$sb/configs" "$sb/barman" "$sb/bin"
+    mkdir -p "$sb/configs" "$sb/backup" "$sb/bin"
     printf 'services: {}\n' > "$sb/docker-compose.yml"
     # Seed from the real .env but strip every version key: the developer's
     # machine may carry them, and these scenarios must start without any.
@@ -150,10 +150,10 @@ done
 grep -q 'image: quay.io/coreos/etcd:v3.7.1$' "$SB/docker-compose.yml" \
     && pass "compose pins etcd v3.7.1" \
     || fail "compose etcd image wrong" "$(grep -n 'coreos/etcd' "$SB/docker-compose.yml")"
-grep -q 'image: haproxy:3.4$' "$SB/docker-compose.yml" \
+grep -q 'image: docker.io/library/haproxy:3.4$' "$SB/docker-compose.yml" \
     && pass "compose pins haproxy 3.4" \
     || fail "compose haproxy image wrong"
-grep -cq 'image: edoburu/pgbouncer:v1.25.2-p0$' "$SB/docker-compose.yml" \
+grep -cq 'image: docker.io/edoburu/pgbouncer:v1.25.2-p0$' "$SB/docker-compose.yml" \
     && pass "compose pins pgbouncer v1.25.2-p0 (both services)" \
     || fail "compose pgbouncer image wrong"
 grep -q 'POSTGRES_VERSION: "18"' "$SB/docker-compose.yml" \
@@ -240,8 +240,8 @@ chmod +x "$SB/bin/docker-compose"
 export SHIM_LOG="$SB/shim.log"; : > "$SHIM_LOG"
 
 set +e
-printf '%s\n' "wiz1" "2" "" "" "y" "17" "" "3.7.1" "" "" "" "y" \
-    | WIZARD_ALLOW_PIPED=1 PATH="$SB/bin:$PATH" \
+printf '%s\n' "wiz1" "2" "" "" "y" "" "17" "" "3.7.1" "" "" "" "y" \
+    | WIZARD_ALLOW_PIPED=1 WIZARD_SKIP_SHIMS=1 PATH="$SB/bin:$PATH" \
       bash "$SB/scripts/utils/wizard.sh" > "$SB/wiz.log" 2>&1
 WRC=$?
 set -e
@@ -266,8 +266,8 @@ run_wizard_switch() {
     # Prompts on the stopped-with-data 'c' path (cluster/admin/db are FIXED):
     # menu, replicas, ports-y, versions x6, REBUILD-guard, apply.
     local sb="$1" guard="$2"
-    printf '%s\n' "c" "" "y" "17" "" "" "" "" "" "$guard" "y" \
-        | WIZARD_ALLOW_PIPED=1 PATH="$sb/bin:$PATH" \
+    printf '%s\n' "c" "" "y" "" "17" "" "" "" "" "" "$guard" "y" \
+        | WIZARD_ALLOW_PIPED=1 WIZARD_SKIP_SHIMS=1 PATH="$sb/bin:$PATH" \
           bash "$sb/scripts/utils/wizard.sh" > "$sb/wiz.log" 2>&1
 }
 

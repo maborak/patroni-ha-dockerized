@@ -106,14 +106,14 @@ echo -e "${CYAN}Output Format:${NC} ${BOLD}${OUTPUT_FORMAT}${NC}"
 echo -e "${CYAN}Output Directory:${NC} ${BOLD}${OUTPUT_DIR}${NC}"
 echo ""
 
-# Check if pgmetrics is available in barman container
-if ! docker exec barman which pgmetrics >/dev/null 2>&1; then
+# Check if pgmetrics is available in backup container
+if ! docker exec backup which pgmetrics >/dev/null 2>&1; then
     echo -e "${YELLOW}pgmetrics not found, installing...${NC}"
-    docker exec barman apt-get update >/dev/null 2>&1
-    docker exec barman apt-get install -y wget >/dev/null 2>&1
+    docker exec backup apt-get update >/dev/null 2>&1
+    docker exec backup apt-get install -y wget >/dev/null 2>&1
     
     # Download pgmetrics binary (single binary, no dependencies)
-    docker exec barman sh -c "wget -q https://github.com/rapidloop/pgmetrics/releases/latest/download/pgmetrics_linux_amd64.tar.gz -O /tmp/pgmetrics.tar.gz && tar -xzf /tmp/pgmetrics.tar.gz -C /usr/local/bin/ && chmod +x /usr/local/bin/pgmetrics && rm /tmp/pgmetrics.tar.gz" 2>&1 || {
+    docker exec backup sh -c "wget -q https://github.com/rapidloop/pgmetrics/releases/latest/download/pgmetrics_linux_amd64.tar.gz -O /tmp/pgmetrics.tar.gz && tar -xzf /tmp/pgmetrics.tar.gz -C /usr/local/bin/ && chmod +x /usr/local/bin/pgmetrics && rm /tmp/pgmetrics.tar.gz" 2>&1 || {
         echo -e "${RED}Failed to install pgmetrics${NC}"
         echo -e "${YELLOW}You can install it manually or use pg_stat_statements instead${NC}"
         exit 1
@@ -146,17 +146,17 @@ for node in "${NODES[@]}"; do
     fi
     
     # Get connection info from node
-    # pgmetrics needs to connect from barman container to the node
+    # pgmetrics needs to connect from backup container to the node
     # We'll use the node's hostname and port
     CONN_STRING="postgresql://postgres:${POSTGRES_PASSWORD}@${node}:5431/postgres"
     
     echo -e "${CYAN}  Collecting metrics...${NC}"
     start_time=$(date +%s)
     
-    # Run pgmetrics from barman container
-    if docker exec barman sh -c "$PGMETRICS_CMD '$CONN_STRING' > /tmp/pgmetrics-output.${OUTPUT_FORMAT}" 2>&1; then
+    # Run pgmetrics from backup container
+    if docker exec backup sh -c "$PGMETRICS_CMD '$CONN_STRING' > /tmp/pgmetrics-output.${OUTPUT_FORMAT}" 2>&1; then
         # Copy output to host
-        docker cp "barman:/tmp/pgmetrics-output.${OUTPUT_FORMAT}" "$OUTPUT_FILE" >/dev/null 2>&1
+        docker cp "backup:/tmp/pgmetrics-output.${OUTPUT_FORMAT}" "$OUTPUT_FILE" >/dev/null 2>&1
         
         end_time=$(date +%s)
         duration=$((end_time - start_time))
@@ -172,7 +172,7 @@ for node in "${NODES[@]}"; do
         fi
         
         # Cleanup
-        docker exec barman rm -f /tmp/pgmetrics-output.${OUTPUT_FORMAT} >/dev/null 2>&1
+        docker exec backup rm -f /tmp/pgmetrics-output.${OUTPUT_FORMAT} >/dev/null 2>&1
     else
         echo -e "${RED}  ✗ Failed to collect metrics${NC}"
         TOTAL_FAILED=$((TOTAL_FAILED + 1))

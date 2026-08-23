@@ -22,7 +22,7 @@
 #   2. dump        — optional logical dumps via scripts/backup/dump_database.sh
 #                    (--dump-db NAME, repeatable; recommended before wiping)
 #   3. confirm     — type REBOOTSTRAP (skipped with --yes / --from-wizard)
-#   4. destroy     — docker-compose down -v (ALL volumes: DBs, Barman, logs)
+#   4. destroy     — docker-compose down -v (ALL volumes: DBs, Backup, logs)
 #   5. configure   — write target versions to .env (--from-wizard already did)
 #   6. bootstrap   — generate configs, compose up, wait until healthy
 # ============================================================================
@@ -50,7 +50,7 @@ print_help() {
 Usage: $0 --postgres VERSION --etcd VERSION [options]
 
 Destroy every volume and rebootstrap the cluster on new PostgreSQL/etcd
-versions. ALL DATA IS LOST (databases, Barman backups, pgBadger history).
+versions. ALL DATA IS LOST (databases, Backup backups, pgBadger history).
 
 Options:
   --postgres VERSION   Target PostgreSQL major (required)
@@ -174,7 +174,7 @@ fi
 PHASE="confirm"
 if [ "$YES" != "1" ] && [ "$FROM_WIZARD" != "1" ]; then
     echo "" >&2
-    echo -e "${RED}${BOLD}This destroys ALL volumes (databases, Barman backups, pgBadger history)${NC}" >&2
+    echo -e "${RED}${BOLD}This destroys ALL volumes (databases, Backup backups, pgBadger history)${NC}" >&2
     printf "%bType exactly 'REBOOTSTRAP' to continue:%b " "${YELLOW}${BOLD}" "${NC}" >&2
     read -r answer || answer=""
     [ "$answer" = "REBOOTSTRAP" ] || fatal "aborted by operator."
@@ -229,7 +229,7 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
         echo "$list" >&2
         echo "" >&2
         echo "  Verify: make status · make check · psql 'SHOW server_version;'" >&2
-        echo "  Reminder: first Barman backup happens on schedule — trigger early: make backup" >&2
+        echo "  Reminder: first Backup backup happens on schedule — trigger early: make backup" >&2
         exit 0
     fi
     sleep 5; elapsed=$((elapsed + 5))

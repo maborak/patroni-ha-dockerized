@@ -17,17 +17,17 @@ works for any cluster size.
 | Area | What is checked |
 |---|---|
 | Stack up | At least one compose container running |
-| Containers | Running state of `etcd1..etcdN`, each `db1..dbN`, `haproxy`, `barman`, `pgbouncer`, `pgbouncer-ro` |
+| Containers | Running state of `etcd1..etcdN`, each `db1..dbN`, `haproxy`, `backup`, `pgbouncer`, `pgbouncer-ro` |
 | etcd health | `etcdctl endpoint health` against every etcd member (loop over `ETCD_COUNT`) |
 | Patroni API | REST API responds on each node and reports a sane role (`Leader` / `Replica`) |
 | Split-brain | Exactly one node reports the primary role via the Patroni API; 0 or >1 raises CRITICAL |
 | Replication lag | On the leader, `pg_stat_replication` per-stream `sent_lsn` vs `replay_lsn`; lag > 1MB is flagged |
-| Barman | `barman check <server> --nagios` per database node — OK / WARNING / CRITICAL |
+| Backup | `barman check <server> --nagios` per database node — OK / WARNING / CRITICAL |
 | PostgreSQL | `pg_isready` on every node (internal port 5431) |
 | PgBouncer | Authenticated `SELECT 1` through both the RW (6432) and RO (6433) pools |
 | HAProxy | Config syntax validation (`haproxy -c`) |
-| SSH keys | Key files exist with 600 perms and `.ssh` dirs with 700, for `postgres` and `barman` users, including the PITR-expected key locations |
-| SSH connectivity | DB → Barman, Barman → DB, and DB ↔ DB, as both `postgres`/`barman` and `root` users |
+| SSH keys | Key files exist with 600 perms and `.ssh` dirs with 700, for `postgres` and `backup` users, including the PITR-expected key locations |
+| SSH connectivity | DB → Backup, Backup → DB, and DB ↔ DB, as both `postgres`/`backup` and `root` users |
 | Exposed ports | From the host: etcd client ports (2379/22379/32379…), per-node PG + Patroni API ports, HAProxy write/read/stats, PgBouncer RW/RO |
 | Cluster status | `patronictl list` output plus a summary of connection endpoints |
 
@@ -47,7 +47,7 @@ will fail next.
 ### Interpreting the output
 
 - `✗` (red) marks a failed check — investigate before doing anything else.
-- `⚠` (yellow) marks a warning (e.g. Barman `--nagios` WARNING state, a missing
+- `⚠` (yellow) marks a warning (e.g. Backup `--nagios` WARNING state, a missing
   optional SSH key) — usually tolerable, never ignore it in a pre-maintenance run.
 - Port checks from the host are informational: a closed port can be normal while
   containers are still starting, so re-run once the stack settles.
@@ -61,10 +61,10 @@ will fail next.
 | `make status` | Patroni cluster status, etcd health, all connection endpoints, latest backups |
 | `make info` | Detailed stack info from `scripts/debug/get_stack_info.sh` (`FORMAT=json` for machine-readable) |
 | `make leader` | Current leader node only |
-| `make disk` | Disk usage report; cleanup modes via `CLEANUP=logs\|dumps\|docker\|snapshots\|temp\|barman\|all` with `DRYRUN=1` |
+| `make disk` | Disk usage report; cleanup modes via `CLEANUP=logs\|dumps\|docker\|snapshots\|temp\|backup\|all` with `DRYRUN=1` |
 | `make check-archive` | WAL archiving status on the leader |
-| `make test-ssh` | SSH connectivity matrix (all nodes ↔ Barman) via `scripts/utils/` |
-| `make test-connectivity` | PostgreSQL connectivity from Barman to the nodes |
+| `make test-ssh` | SSH connectivity matrix (all nodes ↔ Backup) via `scripts/utils/` |
+| `make test-connectivity` | PostgreSQL connectivity from Backup to the nodes |
 | `make smoke-test` | Sandboxed end-to-end tests of the setup wizard and PITR wizard tooling itself (no Docker needed) |
 
 **HAProxy stats page**: open `http://localhost:${HAPROXY_STATS_PORT:-5553}/stats`
@@ -95,7 +95,7 @@ nothing warns when the newest base backup is older than a threshold (e.g. 24h).
 A stale-but-healthy archive gives a false sense of recoverability.
 
 **WAL-gap detection.** No continuous verification that archived WAL segments form
-an unbroken sequence on the Barman side. Gaps silently limit how far back (or
+an unbroken sequence on the Backup side. Gaps silently limit how far back (or
 forward) PITR can reach.
 
 **Time-sync check.** Container clocks are assumed to agree with the host and each

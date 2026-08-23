@@ -35,7 +35,7 @@ Implements docs/switchover.md Section B end-to-end.
 Options:
   --yes          Skip all interactive confirmations
   --dry-run      Print every mutating command without executing it
-  --skip-backup  Skip the pre-switch Barman backup recommendation
+  --skip-backup  Skip the pre-switch Backup backup recommendation
   -h, --help     Show this help
 
 After successful run, repoint apps from Remote back to:
@@ -126,8 +126,8 @@ if [ "$SKIP_BACKUP" -ne 1 ]; then
         log "[DRY-RUN] Would prompt for fresh backup of remote"
     else
         warn "Strongly recommended: take a fresh backup before switching."
-        warn "Remote-side backups are not managed by this stack's barman."
-        warn "Use whatever backup mechanism is configured on remote (pg_basebackup, separate barman, etc.)"
+        warn "Remote-side backups are not managed by this stack's backup."
+        warn "Use whatever backup mechanism is configured on remote (pg_basebackup, separate backup, etc.)"
         if ! confirm "Have you taken a fresh backup (or accept the risk of skipping)?"; then
             fatal "Aborted by operator. Re-run with --skip-backup to skip this gate."
         fi

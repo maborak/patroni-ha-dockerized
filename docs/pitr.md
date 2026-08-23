@@ -1,6 +1,6 @@
 # Point-In-Time Recovery (PITR) - Consolidated Guide
 
-Complete guide for performing Point-In-Time Recovery with Barman in the Patroni HA cluster.
+Complete guide for performing Point-In-Time Recovery with Backup in the Patroni HA cluster.
 
 **Status**: ✅ Fully implemented and automated via `scripts/pitr/perform_pitr.sh`
 
@@ -44,19 +44,19 @@ Point-In-Time Recovery allows you to restore a PostgreSQL database to any specif
 
 1. **Backup Exists**
    ```bash
-   docker exec barman barman list-backup db1
+   docker exec backup barman list-backup db1
    # Should show at least one backup with status "DONE"
    ```
 
 2. **WAL Archiving Active**
    ```bash
-   docker exec barman barman status db1 | grep -E "(Failures|Last archived)"
+   docker exec backup backup status db1 | grep -E "(Failures|Last archived)"
    # Expected: Failures: 0, Last archived shows recent time
    ```
 
 3. **WAL Files Available**
    ```bash
-   docker exec barman barman list-wals db1 | head -10
+   docker exec backup backup list-wals db1 | head -10
    # Should show WAL files covering your target time
    ```
 
@@ -88,7 +88,7 @@ bash scripts/pitr/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' \
   --server db1 \
   --target db2 \
   --restore \
-  --wal-method barman-wal-restore \
+  --wal-method backup-wal-restore \
   --auto-start
 ```
 
@@ -138,14 +138,14 @@ Behavior:
 **Commands**:
 ```bash
 # Get latest backup
-BACKUP_ID=$(docker exec barman barman list-backup db1 | head -2 | tail -1 | awk '{print $2}')
+BACKUP_ID=$(docker exec backup barman list-backup db1 | head -2 | tail -1 | awk '{print $2}')
 
 # Perform PITR to latest
 bash scripts/pitr/perform_pitr.sh $BACKUP_ID latest \
   --server db1 \
   --target db2 \
   --restore \
-  --wal-method barman-wal-restore
+  --wal-method backup-wal-restore
 ```
 
 **Verification**:
@@ -172,14 +172,14 @@ bash scripts/debug/count_database_stats.sh db2
 **Commands**:
 ```bash
 # Identify backup before target time
-docker exec barman barman list-backup db1
+docker exec backup barman list-backup db1
 
 # Perform PITR
 bash scripts/pitr/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' \
   --server db1 \
   --target db2 \
   --restore \
-  --wal-method barman-wal-restore
+  --wal-method backup-wal-restore
 ```
 
 **Important**: Target time must be **after** backup end time.
@@ -213,7 +213,7 @@ docker exec db2 psql -U postgres -d maborak -c "SELECT COUNT(*) FROM your_table;
 2. **Find backup before DELETE:**
    ```bash
    # List backups
-   docker exec barman barman list-backup db1
+   docker exec backup barman list-backup db1
    
    # Choose backup that ended BEFORE the DELETE
    # Example: DELETE at 12:30:00, use backup ending at 12:25:00
@@ -226,7 +226,7 @@ docker exec db2 psql -U postgres -d maborak -c "SELECT COUNT(*) FROM your_table;
      --server db1 \
      --target db2 \
      --restore \
-     --wal-method barman-wal-restore
+     --wal-method backup-wal-restore
    ```
 
 4. **Verify data restored:**
@@ -262,7 +262,7 @@ bash scripts/pitr/perform_pitr.sh 20260123T120000 '2026-01-23 12:30:00' \
   --server db1 \
   --target db2 \
   --restore \
-  --wal-method barman-wal-restore
+  --wal-method backup-wal-restore
 
 # Script automatically:
 # - Stops Patroni
@@ -290,11 +290,11 @@ docker exec db2 psql -U postgres -c "SELECT pg_promote();"
 
 Two methods are available for fetching WAL files during recovery.
 
-### Method 1: barman-wal-restore (Recommended)
+### Method 1: backup-wal-restore (Recommended)
 
 **Command**:
 ```conf
-restore_command = 'barman-wal-restore -U barman barman db1 %f %p'
+restore_command = 'backup-wal-restore -U backup backup db1 %f %p'
 ```
 
 **Advantages**:
@@ -304,13 +304,13 @@ restore_command = 'barman-wal-restore -U barman barman db1 %f %p'
 - ✅ Recommended for most use cases
 
 **Requirements**:
-- `barman-wal-restore` must be in PATH on target node
-- Barman server accessible via network
+- `backup-wal-restore` must be in PATH on target node
+- Backup server accessible via network
 
 **Usage**:
 ```bash
 bash scripts/pitr/perform_pitr.sh <backup-id> <target-time> \
-  --wal-method barman-wal-restore
+  --wal-method backup-wal-restore
 ```
 
 ---
@@ -319,7 +319,7 @@ bash scripts/pitr/perform_pitr.sh <backup-id> <target-time> \
 
 **Command**:
 ```conf
-restore_command = 'test -f %p || (umask 077; tmp="%p.tmp.$$"; ssh -o BatchMode=yes barman@barman "barman get-wal db1 %f" > "$tmp" && mv "$tmp" %p)'
+restore_command = 'test -f %p || (umask 077; tmp="%p.tmp.$$"; ssh -o BatchMode=yes backup@backup "barman get-wal db1 %f" > "$tmp" && mv "$tmp" %p)'
 ```
 
 **Advantages**:
@@ -337,10 +337,10 @@ restore_command = 'test -f %p || (umask 077; tmp="%p.tmp.$$"; ssh -o BatchMode=y
 **Usage**:
 ```bash
 bash scripts/pitr/perform_pitr.sh <backup-id> <target-time> \
-  --wal-method barman-get-wal
+  --wal-method backup-get-wal
 ```
 
-**Note**: Script automatically configures this method when `--wal-method barman-get-wal` is specified.
+**Note**: Script automatically configures this method when `--wal-method backup-get-wal` is specified.
 
 ---
 
@@ -358,7 +358,7 @@ ERROR: Target time is before backup end time!
 **Solution**:
 ```bash
 # Check backup end time
-docker exec barman barman show-backup db1 <backup-id> | grep "End time"
+docker exec backup barman show-backup db1 <backup-id> | grep "End time"
 
 # Use time after backup end, or use 'latest'
 bash scripts/pitr/perform_pitr.sh <backup-id> latest --server db1 --target db2 --restore
@@ -373,13 +373,13 @@ bash scripts/pitr/perform_pitr.sh <backup-id> latest --server db1 --target db2 -
 **Diagnosis**:
 ```bash
 # Check WAL archiving status
-docker exec barman barman status db1 | grep -E "(Failures|Last archived)"
+docker exec backup backup status db1 | grep -E "(Failures|Last archived)"
 
 # List WALs
-docker exec barman barman list-wals db1
+docker exec backup backup list-wals db1
 
 # Check for gaps in sequence
-docker exec barman ls /data/pg-backup/db1/wals/*/ | sort
+docker exec backup ls /data/pg-backup/db1/wals/*/ | sort
 ```
 
 **Solution**:
@@ -388,7 +388,7 @@ docker exec barman ls /data/pg-backup/db1/wals/*/ | sort
 bash scripts/pitr/perform_pitr.sh <backup-id> latest --server db1 --target db2 --restore
 
 # Or use backup end time (guaranteed to have WALs)
-BACKUP_END=$(docker exec barman barman show-backup db1 <backup-id> | grep "End time" | awk '{print $3, $4}')
+BACKUP_END=$(docker exec backup barman show-backup db1 <backup-id> | grep "End time" | awk '{print $3, $4}')
 bash scripts/pitr/perform_pitr.sh <backup-id> "$BACKUP_END" --server db1 --target db2 --restore
 ```
 
@@ -406,12 +406,12 @@ docker exec db2 psql -U postgres -c "SELECT pg_is_in_recovery();"
 # Check logs
 docker exec db2 tail -f /var/log/postgresql/*.log
 
-# Check Barman logs
-docker exec barman tail -f /var/log/barman/barman.log
+# Check Backup logs
+docker exec backup tail -f /var/log/backup/backup.log
 ```
 
 **Common Causes**:
-- WAL file missing (check Barman)
+- WAL file missing (check Backup)
 - Network issues (check SSH connectivity)
 - Disk full (check disk space)
 
@@ -421,10 +421,10 @@ docker exec barman tail -f /var/log/barman/barman.log
 docker exec db2 df -h /var/lib/postgresql
 
 # Check SSH connectivity
-bash scripts/utils/test_ssh_to_barman.sh   # or: make test-ssh
+bash scripts/utils/test_ssh_to_backup.sh   # or: make test-ssh
 
 # Check WAL availability
-docker exec barman barman list-wals db1 | grep <missing-wal>
+docker exec backup backup list-wals db1 | grep <missing-wal>
 ```
 
 ---
@@ -488,10 +488,10 @@ docker exec db1 supervisorctl stop patroni
 **Solution**: Use backup end time exactly or add buffer:
 ```bash
 # Get backup end time
-BACKUP_END=$(docker exec barman barman show-backup db1 <backup-id> | grep "End time" | awk '{print $3, $4}')
+BACKUP_END=$(docker exec backup barman show-backup db1 <backup-id> | grep "End time" | awk '{print $3, $4}')
 
 # Use backup end time or add 30 seconds buffer
-TARGET_TIME=$(docker exec barman date -d "$BACKUP_END + 30 seconds" +"%Y-%m-%d %H:%M:%S")
+TARGET_TIME=$(docker exec backup date -d "$BACKUP_END + 30 seconds" +"%Y-%m-%d %H:%M:%S")
 ```
 
 ---
@@ -503,7 +503,7 @@ TARGET_TIME=$(docker exec barman date -d "$BACKUP_END + 30 seconds" +"%Y-%m-%d %
 **Solution**: Script validates automatically, but manual check:
 ```bash
 # Check last archived WAL
-docker exec barman barman show-server db1 | grep last_archived
+docker exec backup backup show-server db1 | grep last_archived
 
 # Verify target time is within range
 # Target time must be ≤ last archived time
@@ -518,7 +518,7 @@ docker exec barman barman show-server db1 | grep last_archived
 **Solution**: **Always investigate gaps before proceeding**:
 ```bash
 # If script warns about gaps, check:
-docker exec barman barman list-wals db1 | grep <missing-wal>
+docker exec backup backup list-wals db1 | grep <missing-wal>
 
 # Use 'latest' if gaps cannot be resolved
 bash scripts/pitr/perform_pitr.sh <backup-id> latest --server db1 --target db2 --restore
@@ -567,6 +567,6 @@ After PITR completes, verify:
 
 ## References
 
-- **Barman PITR**: https://www.pgbarman.org/documentation/
+- **Backup PITR**: https://www.pgbarman.org/documentation/
 - **PostgreSQL Recovery**: https://www.postgresql.org/docs/15/continuous-archiving.html
 - **perform_pitr.sh**: See `docs/tools/perform_pitr.md`

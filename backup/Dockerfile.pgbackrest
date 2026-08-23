@@ -1,0 +1,46 @@
+ARG POSTGRES_VERSION=18
+FROM docker.io/library/postgres:${POSTGRES_VERSION}
+
+# pgBackRest repository host: receives archive-push over SSH from DB nodes,
+# runs scheduled backups over SSH to the nodes, stores the repo locally.
+# (Debian trixie ships pgBackRest 3.x.)
+RUN apt-get update && apt-get install -y \
+    pgbackrest \
+    openssh-server \
+    openssh-client \
+    rsync \
+    supervisor \
+    && rm -rf /var/lib/apt/lists/*
+
+# Configure SSH for key-based access (nodes -> backup for archive-push;
+# backup -> nodes for remote backups)
+RUN mkdir -p /var/run/sshd /home/backup/.ssh && \
+    ssh-keygen -A && \
+    chmod 700 /home/backup/.ssh && \
+    chown -R backup:backup /home/backup/.ssh
+
+RUN echo "PermitRootLogin no" >> /etc/ssh/sshd_config && \
+    echo "PasswordAuthentication no" >> /etc/ssh/sshd_config && \
+    echo "PubkeyAuthentication yes" >> /etc/ssh/sshd_config && \
+    echo "AuthorizedKeysFile .ssh/authorized_keys" >> /etc/ssh/sshd_config && \
+    echo "StrictModes no" >> /etc/ssh/sshd_config && \
+    echo "LogLevel INFO" >> /etc/ssh/sshd_config
+
+# Create the backup user (mirrors Dockerfile.barman) + repo directories
+RUN mkdir -p /var/lib/pgbackrest /var/log/pgbackroot /home/backup /data/pg-backup && \
+    chown -R backup:backup /var/lib/pgbackrest /home/backup
+
+# pgBackRest config mount point (compose mounts the generated file here)
+RUN mkdir -p /etc/pgbackrest
+
+# Supervisor directory
+RUN mkdir -p /etc/supervisor/conf.d
+
+COPY entrypoint.sh /entrypoint.sh
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 22
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf", "-n"]

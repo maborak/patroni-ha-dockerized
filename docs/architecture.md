@@ -1,6 +1,6 @@
 # Architecture Deep Dive
 
-Complete architectural documentation for the Patroni HA + Barman stack.
+Complete architectural documentation for the Patroni HA + Backup stack.
 
 Everything in this stack is **configured from a single `.env` file**. The number of
 database nodes, the etcd cluster size, ports, credentials, PostgreSQL tuning, backup
@@ -47,7 +47,7 @@ graph TB
         end
 
         subgraph "Backup Layer"
-            BAR[Barman<br/>host :54320 → :5432]
+            BAR[Backup<br/>host :54320 → :5432]
         end
 
         E1 -->|Leader Lock| D1
@@ -93,10 +93,10 @@ infrastructure components and **container-start rendering** for Patroni itself.
 `scripts/generate_configs.sh` reads `.env`, expands `templates/*.tpl`, and writes:
 
 - `configs/haproxy.cfg` — HAProxy backends, one `server dbN` line per node
-- `configs/barman.conf` — global Barman settings plus one `[dbN]` section per node
+- `configs/backup.conf` — global Backup settings plus one `[dbN]` section per node
   with `archiver = on`
 - `configs/pgbouncer.ini` / `configs/pgbouncer-ro.ini` — pooler configs
-- `barman/supervisord.conf` — Barman's internal process supervisor
+- `backup/supervisord.conf` — Backup's internal process supervisor
 - `docker-compose.yml` — the full service topology for the current node counts
 - `.env.example` — refreshed port entries for the current topology
 
@@ -140,7 +140,7 @@ sequenceDiagram
     participant PB as PgBouncer :6432
     participant HAProxy
     participant Leader as db1 (Leader)
-    participant BAR as Barman
+    participant BAR as Backup
 
     Client->>PB: Write query (port 6432)
     PB->>HAProxy: Pooled server connection (haproxy:5431)
@@ -150,7 +150,7 @@ sequenceDiagram
     Leader-->>Client: Result (back through PB/HAProxy)
 
     Note over Leader,BAR: Asynchronous WAL archiving — on EVERY node
-    Leader->>BAR: archive_command: rsync %p → barman:/data/pg-backup/db1/incoming/%f
+    Leader->>BAR: archive_command: rsync %p → backup:/data/pg-backup/db1/incoming/%f
     BAR->>BAR: barman cron: incoming/ → wals/ (pigz-compressed)
 ```
 
@@ -214,7 +214,7 @@ sequenceDiagram
 | haproxy | 5553 | 8404 | Stats page (basic auth) | `HAPROXY_STATS_PORT` |
 | pgbouncer | 6432 | 6432 | Read-write pool (transaction mode) | `PGBOUNCER_PORT` |
 | pgbouncer-ro | 6433 | 6432 | Read-only pool | `PGBOUNCER_RO_PORT` |
-| barman | 54320 | 5432 | Barman (PostgreSQL protocol) | `BARMAN_PORT` |
+| backup | 54320 | 5432 | Backup (PostgreSQL protocol) | `BARMAN_PORT` |
 | pgbadger | 8080 | 80 | pgBadger report web UI | `PGBADGER_PORT` |
 
 ### Container-internal ports (inside the Docker network)
@@ -227,11 +227,11 @@ sequenceDiagram
 | db1..dbN | 22 | SSH (sshd under supervisord; used for WAL archiving and backups) |
 | haproxy | 5431 / 5432 / 8404 | Write / read / stats listeners |
 | pgbouncer, pgbouncer-ro | 6432 | Pool listeners |
-| barman | 22 / 5432 | SSH (receives WAL) / PostgreSQL protocol |
+| backup | 22 / 5432 | SSH (receives WAL) / PostgreSQL protocol |
 
 Because all database containers use identical internal ports, only the **host** ports
 differ (assigned sequentially from `PATRONI_BASE_PORT` and `PATRONI_API_BASE_PORT`).
-In-network services (HAProxy, PgBouncer, Barman) always target `dbN:5431` and
+In-network services (HAProxy, PgBouncer, Backup) always target `dbN:5431` and
 `dbN:8001` regardless of cluster size.
 
 ---
@@ -242,8 +242,8 @@ In-network services (HAProxy, PgBouncer, Barman) always target `dbN:5431` and
 |--------|-------------|---------|---------------|
 | `etcd{n}_data` | `/etcd-data` | etcd cluster state per node | ~100MB each |
 | `db{n}_data` | `/var/lib/postgresql` | PostgreSQL data + config per node | DB size + WAL |
-| `barman_data` | `/var/lib/barman` | Barman metadata, logs | ~1GB |
-| `barman_backup` | `/data/pg-backup` | WALs + base backups for **all** nodes | 2–3× DB size |
+| `backup_data` | `/var/lib/backup` | Backup metadata, logs | ~1GB |
+| `backup_repo` | `/data/pg-backup` | WALs + base backups for **all** nodes | 2–3× DB size |
 
 ### PostgreSQL data directory (per node)
 
@@ -259,7 +259,7 @@ same path (`/var/lib/postgresql/15/patroni1`), distinguished only by living in i
 `db{n}_data` volume. Changing `POSTGRES_VERSION` or `PATRONI_CLUSTER_NAME` therefore
 changes the data path: plan a rebuild before touching them.
 
-### Barman backup structure (shared for all nodes)
+### Backup backup structure (shared for all nodes)
 
 ```
 /data/pg-backup/
@@ -276,7 +276,7 @@ changes the data path: plan a rebuild before touching them.
 - **Network**: `patroni_network`, bridge driver
 - **Subnet**: pinned via `NETWORK_SUBNET` (default `172.20.0.0/16`) — deterministic
   addresses, not Docker auto-assignment
-- **DNS**: Docker's embedded DNS resolves service names (`db1`, `etcd2`, `barman`, ...)
+- **DNS**: Docker's embedded DNS resolves service names (`db1`, `etcd2`, `backup`, ...)
 
 ### Service communication matrix
 
@@ -285,8 +285,8 @@ changes the data path: plan a rebuild before touching them.
 | db1..dbN | etcd1..etcdN | HTTP (etcd3 API, port 2379) | Patroni DCS: leader lock, topology |
 | etcd nodes | each other | HTTP (port 2380) | Raft consensus |
 | db1..dbN | each other | PostgreSQL streaming (5431) | Replication |
-| db1..dbN | barman | rsync over SSH (22) | WAL archiving (every node) |
-| barman | db1..dbN | SSH + psql (5431) | Base backups, WAL fetch, restore |
+| db1..dbN | backup | rsync over SSH (22) | WAL archiving (every node) |
+| backup | db1..dbN | SSH + psql (5431) | Base backups, WAL fetch, restore |
 | haproxy | db1..dbN | HTTP GET (8001) | Health checks: `/primary`, `/replica` |
 | pgbouncer | haproxy | PostgreSQL (5431/5432) | Pooled routing |
 | Clients | pgbouncer / haproxy | PostgreSQL (6432/6433/5551/5552) | Application traffic |
@@ -304,7 +304,7 @@ Passwords use SCRAM-SHA-256, but this stack is a learning/lab environment — se
 - Run PostgreSQL (`POSTGRES_VERSION`, default 15) under Patroni's control
 - Elect exactly one leader via an exclusive lock in etcd
 - Stream replication to replicas (replication slots enabled: `use_slots: true`)
-- Archive WAL to Barman from **every node** (see below)
+- Archive WAL to Backup from **every node** (see below)
 - Expose the REST API on 8001 for HAProxy health checks and `patronictl`
 
 Key DCS settings (from `templates/patroni.yml.tpl`, overridable via `.env`):
@@ -379,14 +379,14 @@ Defaults: `default_pool_size=50`, `max_client_conn=1000`, `reserve_pool_size=10`
 failovers — pooled server connections are re-established against whichever node
 HAProxy reports healthy.
 
-### Barman
+### Backup
 
 - Receives WAL from **every node** — each node's `archive_command` resolves its own
   hostname at runtime and rsyncs each segment over SSH to its own directory on the
-  barman container: `barman:/data/pg-backup/$HOSTNAME/incoming/`. There is no
+  backup container: `backup:/data/pg-backup/$HOSTNAME/incoming/`. There is no
   leader-only check, so a newly promoted leader is already archiving with zero
   post-failover reconfiguration
-- `barman.conf` contains one `[dbN]` section per node with `archiver = on`
+- `backup.conf` contains one `[dbN]` section per node with `archiver = on`
 - `barman cron` (supervisord) moves WALs from `incoming/` to `wals/`, pigz-compressed
 - Base backups via rsync over SSH (`make backup` auto-detects the leader)
 - Retention: `RECOVERY WINDOW OF 7 DAYS` (`BARMAN_RETENTION_POLICY`), bandwidth limit
@@ -429,12 +429,12 @@ partitioned away from the etcd quorum cannot renew its lock and demotes itself, 
 two primaries cannot coexist. If the old primary's WAL diverged before demotion,
 `pg_rewind` repairs it on rejoin.
 
-### Barman failure
+### Backup failure
 
 WAL archiving fails and WAL accumulates in each node's `pg_wal/` (bounded by
 `max_wal_size`, 8GB default — monitor disk). Backups and PITR are unavailable until
-Barman returns; replication and failover are **unaffected**. Detection: `make check`,
-`make check-archive`, or `docker exec barman barman check dbN`.
+Backup returns; replication and failover are **unaffected**. Detection: `make check`,
+`make check-archive`, or `docker exec backup barman check dbN`.
 
 ### PgBouncer / HAProxy failure
 
@@ -452,7 +452,7 @@ HAProxy ports keep working. An HAProxy crash cuts all external traffic
 2. Run `make generate && make up` (or just re-run `make wizard`)
 
 The generator rebuilds `docker-compose.yml` with the new `dbN` services, HAProxy
-backends, and Barman `[dbN]` sections. New nodes join as replicas via `pg_basebackup`
+backends, and Backup `[dbN]` sections. New nodes join as replicas via `pg_basebackup`
 (rate-limited by `PATRONI_BASEBACKUP_MAX_RATE`, default 100MB/s). Removing nodes
 orphans their volumes — clean up with `make disk` or `docker volume rm`.
 
@@ -510,7 +510,7 @@ procedure: [docs/switchover.md](docs/switchover.md) and
 |--------|-----|-------|
 | Patroni REST API (per node, 8001+) | `GET /primary`, `GET /replica`, `GET /patroni` | `/patroni` returns JSON: role, state, timeline, lag |
 | HAProxy stats | `http://localhost:5553/stats` | Basic auth (`HAPROXY_STATS_USER`/`_PASSWORD`) |
-| Barman | `make list-backups`, `docker exec barman barman status dbN` | WAL archiver health, backup inventory |
+| Backup | `make list-backups`, `docker exec backup backup status dbN` | WAL archiver health, backup inventory |
 | PostgreSQL | `make slow-queries`, `make stats`, `make activity`, `make pgbadger NODE=dbN` | `pg_stat_statements` preloaded |
 
 ```bash
@@ -562,9 +562,9 @@ hops; latency-sensitive clients may connect to HAProxy directly (5551/5552).
 Only the leader's WAL "counts" for recovery, but replicas receive the same stream, so
 a freshly promoted leader is already archiving — no post-failover reconfiguration and
 no archive gap during the promotion window. Tradeoff: roughly N× WAL storage on the
-Barman volume; retention keeps it bounded.
+Backup volume; retention keeps it bounded.
 
-### Why Barman (not ad-hoc `pg_basebackup` scripts)?
+### Why Backup (not ad-hoc `pg_basebackup` scripts)?
 
 WAL compression and retention policies, per-node server definitions, `get-wal`
 recovery support, battle-tested PITR tooling. Tradeoff: an extra stateful service
@@ -595,7 +595,7 @@ Kubernetes operators, but this project intentionally stays single-host.
 ## References
 
 - Upstream: [Patroni](https://patroni.readthedocs.io/) ·
-  [Barman](https://www.pgbarman.org/documentation/) ·
+  [Backup](https://www.pgbarman.org/documentation/) ·
   [PostgreSQL replication](https://www.postgresql.org/docs/15/warm-standby.html) ·
   [etcd](https://etcd.io/docs/) · [HAProxy](https://docs.haproxy.org/) ·
   [PgBouncer](https://www.pgbouncer.org/)

@@ -65,7 +65,7 @@ set -e
 
 [ "$RC" -eq 1 ] && pass "exited 1 on missing dependency" \
     || fail "expected exit 1, got $RC" "$(cat "$ENVDIR/out.log")"
-grep -qE 'docker not found' "$ENVDIR/out.log" \
+grep -qE 'no usable container engine' "$ENVDIR/out.log" \
     && pass "names the missing binary" \
     || fail "'docker not found' message missing" "$(cat "$ENVDIR/out.log")"
 grep -q "required dependenc" "$ENVDIR/out.log" \
@@ -100,11 +100,13 @@ run_check "$ENVDIR" > "$ENVDIR/out.log" 2>&1
 RC=$?
 set -e
 
-[ "$RC" -eq 1 ] && pass "exited 1 (docker-compatible CLI required)" \
-    || fail "expected exit 1, got $RC" "$(cat "$ENVDIR/out.log")"
-grep -q "podman-docker" "$ENVDIR/out.log" \
-    && pass "suggests podman-docker bridge" \
-    || fail "bridge hint missing" "$(cat "$ENVDIR/out.log")"
+# With the project's own bin/ shims present (this checkout has them), a
+# podman-only host is fully supported → exit 0 + routing confirmation.
+[ "$RC" -eq 0 ] && pass "podman-only host passes via project shims" \
+    || fail "expected exit 0, got $RC" "$(cat "$ENVDIR/out.log")"
+grep -q "routing container calls via project shims" "$ENVDIR/out.log" \
+    && pass "routing confirmation shown" \
+    || fail "routing note missing" "$(cat "$ENVDIR/out.log")"
 
 # engines subcommand reports availability per mode
 E1=$(PATH="$ENVDIR/bin" bash "$ROOT/scripts/utils/check_deps.sh" engines)

@@ -2,7 +2,7 @@
 
 **File**: `scripts/pitr/perform_pitr.sh`
 
-Automated Point-In-Time Recovery with Barman, with full Patroni integration: backup verification, WAL validation, recovery file creation, node isolation, recovery application, and optional cluster reintegration.
+Automated Point-In-Time Recovery with Backup, with full Patroni integration: backup verification, WAL validation, recovery file creation, node isolation, recovery application, and optional cluster reintegration.
 
 For recovery scenarios, WAL method comparison, and troubleshooting, see [docs/pitr.md](../pitr.md) — this document focuses on the script's interface and behavior.
 
@@ -56,18 +56,18 @@ bash scripts/pitr/perform_pitr.sh <backup-id> <target-time> [OPTIONS]
 
 | Argument | Required | Description | Example |
 |----------|----------|-------------|---------|
-| `<backup-id>` | ✅ Yes | Barman backup identifier (`YYYYMMDDTHHMMSS`) | `20260123T120000` |
+| `<backup-id>` | ✅ Yes | Backup backup identifier (`YYYYMMDDTHHMMSS`) | `20260123T120000` |
 | `<target-time>` | ✅ Yes | Recovery target time or `latest` | `'2026-01-23 12:30:00'` or `latest` |
 
 ### Options
 
 | Option | Argument | Default | Description |
 |--------|----------|---------|-------------|
-| `--server` | `<server>` | Auto-detect | Barman server name (db1..dbN); checks all servers if omitted |
+| `--server` | `<server>` | Auto-detect | Backup server name (db1..dbN); checks all servers if omitted |
 | `--target` | `<node>` | None | Target node (db1..dbN) for automated application |
 | `--target` | `ssh://user@host[:port]/path` | None | Remote PITR mode (see below) |
 | `--restore` | None | `false` | Start PostgreSQL recovery automatically |
-| `--wal-method` | `<method>` | `barman-wal-restore` | WAL fetch method: `barman-wal-restore` or `barman-get-wal` |
+| `--wal-method` | `<method>` | `backup-wal-restore` | WAL fetch method: `backup-wal-restore` or `backup-get-wal` |
 | `--auto-start` | None | `false` | Auto-start, monitor recovery, promote, and reintegrate cluster |
 
 Both space form (`--server db1`) and equals form (`--server=db1`) are accepted. Unknown flags are rejected with an error.
@@ -88,7 +88,7 @@ Wizard steps:
 
 1. **Select backup** — lists backups from all servers; enter `r` to re-scan for new backups, `q` to quit.
 2. **Select target node** — choose from db1..dbN.
-3. **Select WAL method** — `barman-wal-restore` (recommended, default on Enter) or `barman-get-wal`.
+3. **Select WAL method** — `backup-wal-restore` (recommended, default on Enter) or `backup-get-wal`.
 4. **Enter target time** — Enter for `latest`, or a `'YYYY-MM-DD HH:MM:SS'` timestamp.
 5. **Summary + confirm** — shows backup server, backup ID, target node, WAL method, target time; asks `Start PITR? (y/N)`.
 
@@ -108,7 +108,7 @@ bash scripts/pitr/perform_pitr.sh 20260123T120000 latest \
 Behavior:
 
 - Pre-flights SSH connectivity and required tools (`tar`, `rsync`) on the remote; picks the best compressor available on both ends (zstd > pigz > gzip > none).
-- Transfers in three phases: compress in the barman container → resumable `rsync --partial --append-verify` to the remote → decompress and unpack into the target path (wiping any existing contents there, after showing them and asking for confirmation).
+- Transfers in three phases: compress in the backup container → resumable `rsync --partial --append-verify` to the remote → decompress and unpack into the target path (wiping any existing contents there, after showing them and asking for confirmation).
 - Verifies extracted byte size against the source, then cleans up all staging artifacts.
 - Prints **next steps** to run on the remote host: stop PostgreSQL, back up the old data dir, `chown -R postgres:postgres`, verify `postgresql.auto.conf` / `recovery.signal`, and start PostgreSQL (it replays WAL to the target and promotes).
 
@@ -124,7 +124,7 @@ Constraints:
 
 ### `--server <server>`
 
-Barman server configuration to use (db1..dbN). Specify when you know which server holds the backup — it skips auto-detection.
+Backup server configuration to use (db1..dbN). Specify when you know which server holds the backup — it skips auto-detection.
 
 ### `--target <node>`
 
@@ -136,7 +136,7 @@ Starts PostgreSQL in recovery mode and monitors progress. Only meaningful with `
 
 ### `--wal-method <method>`
 
-Sets `restore_command`. `barman-wal-restore` (default, recommended) or `barman-get-wal` (atomic-safe SSH alternative). See [WAL Methods](../pitr.md#wal-methods) in `docs/pitr.md` for the command formats and trade-offs.
+Sets `restore_command`. `backup-wal-restore` (default, recommended) or `backup-get-wal` (atomic-safe SSH alternative). See [WAL Methods](../pitr.md#wal-methods) in `docs/pitr.md` for the command formats and trade-offs.
 
 ### `--auto-start`
 
@@ -265,7 +265,7 @@ Valid recovery times:
 
 **Action**: Use a time after backup end, or `latest`.
 
-For diagnosis of failed steps (Barman logs, disk space, recovery stalls), see [Troubleshooting](../pitr.md#troubleshooting) in `docs/pitr.md`.
+For diagnosis of failed steps (Backup logs, disk space, recovery stalls), see [Troubleshooting](../pitr.md#troubleshooting) in `docs/pitr.md`.
 
 ---
 
@@ -358,7 +358,7 @@ docker exec db1 patronictl -c /etc/patroni/patroni.yml resume
 ### What is not overwritten
 
 - Other nodes (unless `--auto-start` reinitializes them)
-- Barman backups (read-only)
+- Backup backups (read-only)
 - Configuration files (mounted read-only)
 
 ### Irreversible operations
@@ -407,7 +407,7 @@ Staging directories created by a failed run are cleaned up automatically; set `K
 
 ```bash
 # Remove corrupted staging
-docker exec barman rm -rf /tmp/pitr_recovery_*
+docker exec backup rm -rf /tmp/pitr_recovery_*
 
 # Re-run the script
 bash scripts/pitr/perform_pitr.sh <backup-id> <target-time> --server db1 --target db2 --restore
@@ -418,7 +418,7 @@ bash scripts/pitr/perform_pitr.sh <backup-id> <target-time> --server db1 --targe
 ## References
 
 - [docs/pitr.md](../pitr.md) — scenarios, WAL methods, troubleshooting
-- **Barman**: https://www.pgbarman.org/documentation/
+- **Backup**: https://www.pgbarman.org/documentation/
 - **PostgreSQL continuous archiving**: https://www.postgresql.org/docs/15/continuous-archiving.html
 - **Patroni operations**: https://patroni.readthedocs.io/en/latest/
 - **Testing**: `make smoke-test` runs sandboxed wizard + PITR tests (`scripts/testing/smoke_test_*.sh`)

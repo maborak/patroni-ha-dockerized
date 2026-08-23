@@ -7,7 +7,7 @@ ifeq ($(wildcard bin/docker),)
 $(shell bash scripts/utils/setup_engine_shims.sh >/dev/null 2>&1 || true)
 endif
 
-.PHONY: help doctor generate setup-keys up wizard down restart rebootstrap logs ps build destroy status shell-db1 shell-db2 shell-db3 shell-db4 shell-etcd1 shell-haproxy shell-barman shell show-backups check smoke-test backup dump-db restore-db list-backups check-archive pitr monitor-recovery vacuum analyze pgbadger psql psql-read psql-node list-dbs stats activity slow-queries switchover reinit failover scale switchover-to-remote switchover-from-remote test-ssh test-connectivity info config leader disk versions
+.PHONY: help doctor generate setup-keys up wizard down restart rebootstrap logs ps build destroy status shell-db1 shell-db2 shell-db3 shell-db4 shell-etcd1 shell-haproxy shell-backup shell show-backups check smoke-test backup dump-db restore-db list-backups check-archive pitr monitor-recovery vacuum analyze pgbadger psql psql-read psql-node list-dbs stats activity slow-queries switchover reinit failover scale switchover-to-remote switchover-from-remote test-ssh test-connectivity info config leader disk versions
 
 .DEFAULT_GOAL := help
 
@@ -59,17 +59,17 @@ ps: ## Show container status
 build: ## Rebuild all Docker images (no cache)
 	docker-compose build --no-cache
 
-destroy: ## ⚠️ Destroy stack AND ALL DATA: containers, volumes (DB data, etcd, Barman backups). Confirm required (YES=1 to skip, PRUNE=1 to also prune docker system-wide)
+destroy: ## ⚠️ Destroy stack AND ALL DATA: containers, volumes (DB data, etcd, Backup backups). Confirm required (YES=1 to skip, PRUNE=1 to also prune docker system-wide)
 	@if [ "$(YES)" != "1" ]; then \
 		echo ""; \
 		echo "============================================================"; \
 		echo "  ⚠️  WARNING: DESTROYING THE PATRONI HA STACK  ⚠️"; \
 		echo "============================================================"; \
 		echo "This will PERMANENTLY DELETE:"; \
-		echo "  - All containers (db1-dbN, etcd, haproxy, pgbouncer, barman)"; \
+		echo "  - All containers (db1-dbN, etcd, haproxy, pgbouncer, backup)"; \
 		echo "  - ALL PostgreSQL data volumes (leader + replicas)"; \
 		echo "  - etcd cluster state"; \
-		echo "  - ALL Barman backups and WAL archives"; \
+		echo "  - ALL Backup backups and WAL archives"; \
 		echo ""; \
 		echo "There is NO undo. Backups on Docker volumes will be gone."; \
 		echo "To save a backup first: make backup"; \
@@ -99,7 +99,7 @@ smoke-test: ## Run end-to-end smoke tests (wizard + PITR + scale + versions + de
 	@bash scripts/testing/smoke_test_versions.sh
 	@bash scripts/testing/smoke_test_deps.sh
 
-status: ## Show cluster status, health, and all access endpoints (HAProxy, PgBouncer, nodes, Barman)
+status: ## Show cluster status, health, and all access endpoints (HAProxy, PgBouncer, nodes, Backup)
 	@. ./.env 2>/dev/null; \
 	LEADER=$$(docker exec db1 patronictl -c /etc/patroni/patroni.yml list 2>/dev/null | grep Leader | awk '{print $$2}'); \
 	PGUSER=$${POSTGRES_USER:-postgres}; \
@@ -141,9 +141,9 @@ status: ## Show cluster status, health, and all access endpoints (HAProxy, PgBou
 	echo "=== HAProxy Stats ==="; \
 	echo "  http://localhost:$${HAPROXY_STATS_PORT:-5553}/stats"; \
 	echo ""; \
-	echo "=== Barman Backups ==="; \
+	echo "=== Backup Backups ==="; \
 	if [ -n "$$LEADER" ]; then \
-		BACKUPS=$$(docker exec barman barman list-backup $$LEADER 2>/dev/null | head -5); \
+		BACKUPS=$$(docker exec backup $$( [ "$$(grep -E '^BACKUP_TOOL=' .env 2>/dev/null | cut -d= -f2)" = pgbackrest ] && echo "pgbackrest info" || echo "barman list-backup" ) $$LEADER 2>/dev/null | head -5); \
 		if [ -n "$$BACKUPS" ]; then echo "$$BACKUPS"; else echo "  No backups listed for $$LEADER — create one: make backup"; fi; \
 	else \
 		echo "  Leader unknown — list manually: make list-backups [SERVER=dbN]"; \
@@ -196,7 +196,7 @@ info: ## Show detailed stack information (JSON or human-readable)
 leader: ## Show current leader node
 	@docker exec db1 patronictl -c /etc/patroni/patroni.yml list | grep Leader | awk '{print "Leader: " $$2}'
 
-disk: ## Disk usage / cleanup (FORMAT=json | CLEANUP=logs|dumps|docker|snapshots|temp|barman|all [KEEP_DAYS=N] [DRYRUN=1])
+disk: ## Disk usage / cleanup (FORMAT=json | CLEANUP=logs|dumps|docker|snapshots|temp|backup|all [KEEP_DAYS=N] [DRYRUN=1])
 	@if [ -n "$(CLEANUP)" ]; then \
 		case "$(CLEANUP)" in \
 			1|logs)    FLAG="--cleanup-logs" ;; \
@@ -204,9 +204,9 @@ disk: ## Disk usage / cleanup (FORMAT=json | CLEANUP=logs|dumps|docker|snapshots
 			docker)    FLAG="--cleanup-docker" ;; \
 			snapshots) FLAG="--cleanup-snapshots" ;; \
 			temp)      FLAG="--cleanup-temp" ;; \
-			barman)    FLAG="--cleanup-barman" ;; \
+			backup)    FLAG="--cleanup-backup" ;; \
 			all)       FLAG="--cleanup-all" ;; \
-			*)         echo "Unknown CLEANUP value: $(CLEANUP). Valid: logs|dumps|docker|snapshots|temp|barman|all"; exit 1 ;; \
+			*)         echo "Unknown CLEANUP value: $(CLEANUP). Valid: logs|dumps|docker|snapshots|temp|backup|all"; exit 1 ;; \
 		esac; \
 		bash scripts/debug/disk_usage.sh $$FLAG $(if $(KEEP_DAYS),--keep-days=$(KEEP_DAYS),) $(if $(DRYRUN),--dry-run,); \
 	elif [ "$(FORMAT)" = "json" ]; then \
@@ -236,32 +236,32 @@ backup: ## Create backup (auto-detects leader, or use SERVER=db1 to override)
 		echo "Leader detected: $$SERVER"; \
 	fi; \
 	echo ""; \
-	echo "=== Step 3: Barman Check ==="; \
-	docker exec barman barman check $$SERVER; \
+	echo "=== Step 3: Backup Check ==="; \
+	docker exec backup $$( [ "$$(grep -E '^BACKUP_TOOL=' .env 2>/dev/null | cut -d= -f2)" = pgbackrest ] && echo "pgbackrest info $$SERVER" || echo "barman check $$SERVER" ); \
 	CHECK_EXIT=$$?; \
 	if [ $$CHECK_EXIT -ne 0 ]; then \
 		echo ""; \
-		echo "⚠️  Warning: Barman check failed (exit code: $$CHECK_EXIT)"; \
+		echo "⚠️  Warning: Backup check failed (exit code: $$CHECK_EXIT)"; \
 		echo "Backup may still proceed, but issues detected."; \
 		echo ""; \
 	fi; \
 	echo ""; \
 	echo "=== Step 4: Creating Backup ==="; \
 	echo "Creating backup of $$SERVER..."; \
-	docker exec barman barman backup $$SERVER; \
+	if [ "$$(grep -E "^BACKUP_TOOL=" .env 2>/dev/null | cut -d= -f2)" = pgbackrest ]; then docker exec backup pgbackrest --stanza=$$SERVER --type=incr backup; else docker exec backup barman backup $$SERVER; fi; \
 	BACKUP_EXIT=$$?; \
 	if [ $$BACKUP_EXIT -eq 0 ]; then \
 		echo ""; \
 		echo "✓ Backup created successfully"; \
 		echo ""; \
 		echo "=== Step 5: Listing Backups ==="; \
-		docker exec barman barman list-backup $$SERVER | head -10; \
+		docker exec backup $$( [ "$$(grep -E '^BACKUP_TOOL=' .env 2>/dev/null | cut -d= -f2)" = pgbackrest ] && echo "pgbackrest info" || echo "barman list-backup" ) $$SERVER | head -10; \
 		echo ""; \
 		echo "To see full backup list: make list-backups SERVER=$$SERVER"; \
 	else \
 		echo ""; \
 		echo "✗ Backup failed (exit code: $$BACKUP_EXIT)"; \
-		echo "Check Barman logs: docker logs barman"; \
+		echo "Check Backup logs: docker logs backup"; \
 		exit $$BACKUP_EXIT; \
 	fi
 
@@ -274,7 +274,7 @@ list-backups: ## List backups (auto-detects leader, or use SERVER=db1 to overrid
 			echo ""; \
 			. ./.env 2>/dev/null; for i in $$(seq 1 $$(($${PATRONI_REPLICAS:-2} + 1))); do s="db$$i"; \
 				echo "=== $$s ==="; \
-				docker exec barman barman list-backup $$s 2>/dev/null || echo "No backups or server not configured"; \
+				docker exec backup $$( [ "$$(grep -E '^BACKUP_TOOL=' .env 2>/dev/null | cut -d= -f2)" = pgbackrest ] && echo "pgbackrest info" || echo "barman list-backup" ) $$s 2>/dev/null || echo "No backups or server not configured"; \
 				echo ""; \
 			done; \
 			exit 0; \
@@ -285,7 +285,7 @@ list-backups: ## List backups (auto-detects leader, or use SERVER=db1 to overrid
 		echo "Using specified server: $$SERVER"; \
 	fi; \
 	echo "=== Backups for $$SERVER ==="; \
-	docker exec barman barman list-backup $$SERVER
+	docker exec backup $$( [ "$$(grep -E '^BACKUP_TOOL=' .env 2>/dev/null | cut -d= -f2)" = pgbackrest ] && echo "pgbackrest info" || echo "barman list-backup" ) $$SERVER
 
 show-backups: ## Show backup details (usage: make show-backups SERVER=db1 BACKUP_ID=20260123T120000)
 	@if [ -z "$(SERVER)" ] || [ -z "$(BACKUP_ID)" ]; then \
@@ -295,10 +295,15 @@ show-backups: ## Show backup details (usage: make show-backups SERVER=db1 BACKUP
 		echo "  make list-backups SERVER=db1"; \
 		exit 1; \
 	fi
-	@docker exec barman barman show-backup $(SERVER) $(BACKUP_ID)
+	@docker exec backup $$( [ "$$(grep -E '^BACKUP_TOOL=' .env 2>/dev/null | cut -d= -f2)" = pgbackrest ] && echo "pgbackrest info $(SERVER)" || echo "barman show-backup $(SERVER) $(BACKUP_ID)" )
 
 check-archive: ## Check WAL archiving status on leader
-	@bash scripts/backup/check_archive_command.sh
+	@if [ "$$(grep -E '^BACKUP_TOOL=' .env 2>/dev/null | cut -d= -f2)" = pgbackrest ]; then \
+		L=$$(docker exec db1 patronictl -c /etc/patroni/patroni.yml list 2>/dev/null | grep Leader | awk '{print $$2}'); \
+		docker exec backup pgbackrest --stanza=$${L:-db1} check || true; \
+	else \
+		bash scripts/backup/check_archive_command.sh; \
+	fi
 
 dump-db: ## Logical .tgz backup of a single DB from a healthy replica (DB=name [NODE=db3] [JOBS=8] [OUTPUT=./backups] [YES=1])
 	@bash scripts/backup/dump_database.sh \
@@ -334,7 +339,7 @@ restore-db: ## Restore a DB from .tgz, local or remote (ARCHIVE=path [TARGET=nam
 # Recovery Operations
 # ============================================================================
 
-pitr: ## Point-in-time recovery wizard (no args = interactive; or make pitr BACKUP_ID=xxx TARGET_TIME='2026-01-23 12:30:00' [SERVER=db1] [TARGET=db2] [RESTORE=1] [AUTO_START=1] [WAL_METHOD=barman-get-wal])
+pitr: ## Point-in-time recovery wizard (no args = interactive; or make pitr BACKUP_ID=xxx TARGET_TIME='2026-01-23 12:30:00' [SERVER=db1] [TARGET=db2] [RESTORE=1] [AUTO_START=1] [WAL_METHOD=backup-get-wal])
 	@if [ -z "$(BACKUP_ID)" ] && [ -z "$(TARGET_TIME)" ]; then \
 		bash scripts/pitr/perform_pitr.sh; \
 	elif [ -z "$(BACKUP_ID)" ] || [ -z "$(TARGET_TIME)" ]; then \
@@ -347,7 +352,7 @@ pitr: ## Point-in-time recovery wizard (no args = interactive; or make pitr BACK
 		echo "  TARGET=db2          Target node for recovery"; \
 		echo "  RESTORE=1           Apply recovery to target node"; \
 		echo "  AUTO_START=1        Auto-start PostgreSQL after recovery"; \
-		echo "  WAL_METHOD=...      barman-wal-restore (default) or barman-get-wal"; \
+		echo "  WAL_METHOD=...      backup-wal-restore (default) or backup-get-wal"; \
 		exit 1; \
 	else \
 		bash scripts/pitr/perform_pitr.sh $(BACKUP_ID) "$(TARGET_TIME)" \
@@ -529,13 +534,13 @@ switchover-from-remote: ## Cross-cluster: Remote → Mac (reverse). YES=1 skips 
 # Testing & Connectivity
 # ============================================================================
 
-test-ssh: ## Test SSH connectivity (all nodes to Barman and vice versa)
-	@bash scripts/utils/test_ssh_to_barman.sh
+test-ssh: ## Test SSH connectivity (all nodes to Backup and vice versa)
+	@bash scripts/utils/test_ssh_to_backup.sh
 	@echo ""
-	@bash scripts/utils/test_barman_ssh_to_patroni.sh
+	@bash scripts/utils/test_backup_ssh_to_patroni.sh
 
-test-connectivity: ## Test PostgreSQL connectivity from Barman
-	@bash scripts/utils/test_barman_postgres_connectivity.sh
+test-connectivity: ## Test PostgreSQL connectivity from Backup
+	@bash scripts/utils/test_backup_postgres_connectivity.sh
 
 # ============================================================================
 # Shell Access
@@ -559,13 +564,13 @@ shell-etcd1: ## Open shell in etcd1 container
 shell-haproxy: ## Open shell in haproxy container
 	docker exec -it haproxy sh
 
-shell-barman: ## Open bash shell in barman container
-	docker exec -it barman bash
+shell-backup: ## Open bash shell in backup container
+	docker exec -it backup bash
 
 shell: ## Open shell in specified node (usage: make shell NODE=db1)
 	@if [ -z "$(NODE)" ]; then \
 		echo "Usage: make shell NODE=db1"; \
-		echo "Or use: make shell-db1, make shell-barman, etc."; \
+		echo "Or use: make shell-db1, make shell-backup, etc."; \
 		exit 1; \
 	fi
 	@docker exec -it $(NODE) bash || docker exec -it $(NODE) sh

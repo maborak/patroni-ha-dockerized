@@ -69,7 +69,7 @@ grep -q "Point-In-Time Recovery (PITR)" "$PITR_LOG" \
     || fail "wizard banner not shown" "$(tail -20 "$PITR_LOG")"
 
 grep -q "Found .* backup(s)" "$PITR_LOG" \
-    && pass "backups listed from barman stub" \
+    && pass "backups listed from backup stub" \
     || fail "no backups found" "$(tail -20 "$PITR_LOG")"
 
 grep -q "PITR Configuration Summary" "$PITR_LOG" \
@@ -118,7 +118,7 @@ chmod +x "$SANDBOX/scripts/pitr/perform_pitr.sh"
 
 PATH="$SANDBOX/bin:$PATH" make -C "$SANDBOX" pitr \
     BACKUP_ID=20260821T120000 TARGET_TIME="2026-01-23 12:30:00" \
-    SERVER=db2 TARGET=db1 RESTORE=1 AUTO_START=1 WAL_METHOD=barman-get-wal \
+    SERVER=db2 TARGET=db1 RESTORE=1 AUTO_START=1 WAL_METHOD=backup-get-wal \
     > /dev/null 2>&1
 
 EXPECTED_ARGS='20260821T120000
@@ -130,7 +130,7 @@ db1
 --restore
 --auto-start
 --wal-method
-barman-get-wal'
+backup-get-wal'
 ACTUAL_ARGS="$(cat "$SANDBOX/pitr_invocation.args")"
 [ "$ACTUAL_ARGS" = "$EXPECTED_ARGS" ] \
     && pass "full args forwarded to perform_pitr.sh verbatim" \

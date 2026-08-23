@@ -25,7 +25,7 @@ This project ships a **lab-oriented** Docker Compose stack:
 - Default passwords and the default HAProxy stats credentials in
   `.env.example` are placeholders — change them before running anything
   reachable by others.
-- etcd, the Patroni REST API, per-node PostgreSQL, and Barman ports are
+- etcd, the Patroni REST API, per-node PostgreSQL, and Backup ports are
   published on the Docker host (localhost by default). Restrict access with a
   firewall/VPN before exposing the stack beyond localhost.
 - `.env`, SSH keys (`ssh_keys/`), and generated `configs/` are gitignored;

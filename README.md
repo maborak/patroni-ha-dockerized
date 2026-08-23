@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15--18-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org)
 [![Patroni](https://img.shields.io/badge/HA-Patroni-orange)](https://github.com/patroni/patroni)
-[![Barman](https://img.shields.io/badge/Backup-Barman-blue)](https://pgbarman.org)
+[![Backup](https://img.shields.io/badge/Backup-Backup-blue)](https://pgbarman.org)
 [![etcd](https://img.shields.io/badge/DCS-etcd_3.5-419eda)](https://etcd.io)
 
 A production-grade, single-command **PostgreSQL High-Availability lab and toolbox**, fully dockerized:
@@ -11,7 +11,7 @@ A production-grade, single-command **PostgreSQL High-Availability lab and toolbo
 - **Patroni** automated failover with a **3-node etcd** quorum
 - **HAProxy** read/write split with health-checked routing
 - **PgBouncer** connection pooling (RW + read-only)
-- **Barman** backups, WAL archiving and **Point-In-Time Recovery**
+- **Backup** backups, WAL archiving and **Point-In-Time Recovery**
 - **Interactive setup wizard**, interactive PITR wizard, and cross-cluster **DR switchover** tooling
 - Everything is **configurable from one `.env` file** — node count, cluster name, ports, tuning, retention
 
@@ -50,7 +50,7 @@ A production-grade, single-command **PostgreSQL High-Availability lab and toolbo
 | **Consensus** | 3-node etcd cluster (quorum of 2, tolerates one failure) |
 | **Routing** | HAProxy: `:5551` writes → current leader, `:5552` reads → replicas (health-checked via the Patroni API) |
 | **Pooling** | 2× PgBouncer in transaction mode: `:6432` read-write, `:6433` read-only |
-| **Backups** | Barman with per-node WAL archiving, retention policy, parallel jobs, bandwidth limits |
+| **Backups** | Backup with per-node WAL archiving, retention policy, parallel jobs, bandwidth limits |
 | **Log analytics** | pgBadger container: cron-driven JSON log collection from all nodes, source cleanup after verified pull, retention, and a built-in web UI (`:8080`) |
 | **PITR** | Interactive recovery wizard: pick backup → target node → WAL method → target time → done |
 | **DR** | Cross-cluster switchover runbooks + scripts to promote a remote standby cluster and back |
@@ -123,13 +123,13 @@ Expected `make status` output (default topology):
                         │   │  data dir per node, WAL →      │       │
                         │   └────┬──────────────────┬───────┘       │
                         │        │ DCS              │ rsync WAL     │
-                        │   etcd1 etcd2 etcd3   Barman (:54320)     │
+                        │   etcd1 etcd2 etcd3   Backup (:54320)     │
                         └────────┴──────────────────┴───────────────┘
 ```
 
 - **Patroni** keeps member state in etcd; the leader holds the DCS lock. If it dies, a replica is promoted automatically (~10–30 s) and HAProxy follows the health checks.
 - **HAProxy** routes `:5551` to whoever answers `GET /primary` and `:5552` round-robin across `GET /replica` healthy nodes.
-- **Every node** ships WAL to Barman continuously (`archive_command`), so you can restore from any node's vantage point.
+- **Every node** ships WAL to Backup continuously (`archive_command`), so you can restore from any node's vantage point.
 - **Config pipeline**: `templates/*.tpl` → `make generate` → `configs/`, `docker-compose.yml` (gitignored artifacts). The Patroni config itself is rendered *inside* each container at startup.
 
 Full details: [docs/architecture.md](docs/architecture.md).
@@ -140,7 +140,7 @@ Full details: [docs/architecture.md](docs/architecture.md).
 |---|---|---|
 | HAProxy | `5551` / `5552` / `5553` | write / read / stats page (auth required) |
 | PgBouncer | `6432` / `6433` | pooled rw / pooled ro |
-| Barman | `54320` | backup server API |
+| Backup | `54320` | backup server API |
 | pgBadger | `8080` | web UI for generated log-analysis reports |
 | etcd | `2379`, `22379`, `32379` | DCS client ports (peers `+1`) |
 | PostgreSQL nodes | `15431…1543N` | direct node access (bypasses failover) |
@@ -175,7 +175,7 @@ make scale REPLICAS=5            # grow to 6 members; new nodes join as replicas
 make scale REPLICAS=2 DRY_RUN=1  # preview any resize before touching the stack
 ```
 
-Grow regenerates configs, starts the new nodes (they sync from the leader via basebackup) and waits until every member is `running`/`streaming`. Shrink removes the highest-numbered nodes — it switches the leader over first if needed, then (after typed confirmation) deletes their containers, data/log volumes and Barman backups. See [docs/runbooks.md](docs/runbooks.md#runbook-scaling-the-cluster).
+Grow regenerates configs, starts the new nodes (they sync from the leader via basebackup) and waits until every member is `running`/`streaming`. Shrink removes the highest-numbered nodes — it switches the leader over first if needed, then (after typed confirmation) deletes their containers, data/log volumes and Backup backups. See [docs/runbooks.md](docs/runbooks.md#runbook-scaling-the-cluster).
 
 ## Everyday operations
 
@@ -200,7 +200,7 @@ Run `make help` for the full list (~45 targets).
 ## Backup & PITR
 
 ```bash
-make backup                        # Barman base backup of the leader
+make backup                        # Backup base backup of the leader
 make list-backups                  # list backups per server
 make show-backups SERVER=db2 BACKUP_ID=20260821T120000
 make check-archive                 # WAL archiving health
@@ -213,7 +213,7 @@ Point-in-time recovery is wizard-driven:
 make pitr
 # 1. select a backup (with re-scan)
 # 2. select a target node
-# 3. choose WAL method (barman-wal-restore recommended / barman-get-wal)
+# 3. choose WAL method (backup-wal-restore recommended / backup-get-wal)
 # 4. target time ('latest' or '2026-08-21 12:30:00')
 # 5. review summary → confirm
 ```
@@ -278,7 +278,7 @@ Also available: [stress testing tools](scripts/testing/README_stress_test.md).
 | No leader elected | `docker logs db1`; etcd health in `make status` |
 | Writes fail on `:5551` | HAProxy stats `:5553`; `make leader`; Patroni API `:800N` |
 | Replicas lagging | `make check` (replication lag section); `make stats` |
-| WAL archive failures | `make check-archive`; `docker exec barman barman check db1` |
+| WAL archive failures | `make check-archive`; `docker exec backup barman check db1` |
 | PgBouncer auth errors | `.env` credentials vs `configs/userlist.txt` regeneration (`make generate`) |
 | Node stuck in `creating replica` | `make reinit NODE=dbN` |
 
@@ -287,9 +287,9 @@ More: [docs/runbooks.md](docs/runbooks.md#troubleshooting) · [docs/checks.md](d
 ## Security notes
 
 - **Secrets live in `.env`** (gitignored). Generated configs interpolate them at build time.
-- **SSH keys** for Barman ↔ node communication are auto-generated into `ssh_keys/` (gitignored) on first run.
+- **SSH keys** for Backup ↔ node communication are auto-generated into `ssh_keys/` (gitignored) on first run.
 - **HAProxy stats page** requires basic auth (`HAPROXY_STATS_USER`/`HAPROXY_STATS_PASSWORD` — change the default).
-- **Exposed ports**: this is a lab-friendly stack — etcd, node APIs and Barman are bound to localhost host ports. For anything beyond localhost, front it with a firewall or VPN and change all default passwords.
+- **Exposed ports**: this is a lab-friendly stack — etcd, node APIs and Backup are bound to localhost host ports. For anything beyond localhost, front it with a firewall or VPN and change all default passwords.
 - Play with it freely; **do not expose it directly to the internet** as-shipped.
 
 ## Project layout
@@ -299,7 +299,7 @@ More: [docs/runbooks.md](docs/runbooks.md#troubleshooting) · [docs/checks.md](d
 ├── .env.example             # full configuration reference
 ├── templates/               # config templates (rendered by make generate / entrypoint)
 ├── patroni/                 # Patroni node image (entrypoint renders per-node config)
-├── barman/                  # Barman image + supervisord
+├── backup/                  # Backup image + supervisord
 ├── pgbadger/                # pgBadger image (cron collection + web UI)
 ├── remote-standby/          # standby-cluster Patroni template + Arch Linux PG15 build guide
 ├── scripts/

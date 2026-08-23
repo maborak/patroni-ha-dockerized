@@ -1,5 +1,5 @@
 #!/bin/bash
-# Test SSH connectivity from all Patroni nodes to Barman
+# Test SSH connectivity from all Patroni nodes to Backup
 
 set -e
 
@@ -8,20 +8,20 @@ source "$SCRIPT_DIR/../lib/common.sh"
 cd "$SCRIPT_DIR/../"
 
 echo -e "${BLUE}========================================${NC}"
-echo -e "${BLUE}  Testing SSH from Patroni to Barman${NC}"
+echo -e "${BLUE}  Testing SSH from Patroni to Backup${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo ""
 
 # Check if SSH keys exist
-if [ ! -f "ssh_keys/barman_rsa" ] || [ ! -f "ssh_keys/barman_rsa.pub" ]; then
+if [ ! -f "ssh_keys/backup_rsa" ] || [ ! -f "ssh_keys/backup_rsa.pub" ]; then
     echo -e "${RED}ERROR: SSH keys not found!${NC}"
     echo "Please run: ./scripts/utils/setup_ssh_keys.sh"
     exit 1
 fi
 
 # Check if containers are running
-if ! docker ps --format '{{.Names}}' | grep -q "^barman$"; then
-    echo -e "${RED}ERROR: Barman container is not running!${NC}"
+if ! docker ps --format '{{.Names}}' | grep -q "^backup$"; then
+    echo -e "${RED}ERROR: Backup container is not running!${NC}"
     echo "Please start the stack with: docker-compose up -d"
     exit 1
 fi
@@ -38,10 +38,10 @@ for node in "${DB_NODES[@]}"; do
         continue
     fi
     
-    echo -e "${YELLOW}Testing SSH from ${node} to barman...${NC}"
+    echo -e "${YELLOW}Testing SSH from ${node} to backup...${NC}"
     
     # Test SSH connection
-    SSH_OUTPUT=$(docker exec ${node} sh -c "ssh -i /home/postgres/.ssh/barman_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 barman@barman 'echo SSH connection successful' 2>&1" 2>&1)
+    SSH_OUTPUT=$(docker exec ${node} sh -c "ssh -i /home/postgres/.ssh/backup_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 backup@backup 'echo SSH connection successful' 2>&1" 2>&1)
     SSH_EXIT_CODE=$?
     
     if [ $SSH_EXIT_CODE -eq 0 ]; then

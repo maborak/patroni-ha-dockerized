@@ -66,11 +66,11 @@ CLEANUP (mutually exclusive with --json; multiple categories may be combined):
                           each running db node. Only files older than 60
                           minutes are removed (avoids racing active sorts).
 
-  --cleanup-barman        Delete all active Barman backups. Shows current
+  --cleanup-backup        Delete all active Backup backups. Shows current
                           backups and requests interactive confirmation
                           before executing.
 
-  --cleanup-all           Run every cleanup category above (excludes Barman).
+  --cleanup-all           Run every cleanup category above (excludes Backup).
 
 RETENTION:
   --keep-days=N           Days to keep for --cleanup-dumps and
@@ -82,10 +82,10 @@ RETENTION:
 
   -h, --help              Show this help.
 
-NOT TOUCHED (unless explicitly requested via --cleanup-barman):
-  - WAL files in pg_wal/        — owned by PostgreSQL / Barman archiving
-  - Barman backups & WAL archive — managed by Barman retention_policy (or deleted via --cleanup-barman)
-  - Named volumes (dbN_data, barman_backup, etcd*_data)
+NOT TOUCHED (unless explicitly requested via --cleanup-backup):
+  - WAL files in pg_wal/        — owned by PostgreSQL / Backup archiving
+  - Backup backups & WAL archive — managed by Backup retention_policy (or deleted via --cleanup-backup)
+  - Named volumes (dbN_data, backup_repo, etcd*_data)
 
 EXAMPLES:
   $(basename "$0")                              # report only
@@ -106,7 +106,7 @@ for arg in "$@"; do
         --cleanup-docker)     DO_CLEANUP_DOCKER=true ;;
         --cleanup-snapshots)  DO_CLEANUP_SNAPSHOTS=true ;;
         --cleanup-temp)       DO_CLEANUP_TEMP=true ;;
-        --cleanup-barman)     DO_CLEANUP_BARMAN=true ;;
+        --cleanup-backup)     DO_CLEANUP_BARMAN=true ;;
         --cleanup-all)
             DO_CLEANUP_LOGS=true
             DO_CLEANUP_DUMPS=true
@@ -135,12 +135,12 @@ DB_NODES=($(get_db_nodes))
 PG_LOG_DIR="/var/log/postgresql"
 
 # Services from docker-compose
-SERVICES=(etcd1 etcd2 etcd3 $(get_db_nodes) barman haproxy pgbouncer pgbouncer-ro)
+SERVICES=(etcd1 etcd2 etcd3 $(get_db_nodes) backup haproxy pgbouncer pgbouncer-ro)
 
 # Named volumes from docker-compose
 VOLUMES=(etcd1_data etcd2_data etcd3_data)
 for db in $(get_db_nodes); do VOLUMES+=("${db}_data"); done
-VOLUMES+=(barman_data barman_backup)
+VOLUMES+=(backup_data backup_repo)
 
 # Get the docker-compose project name prefix
 # Docker Compose uses the directory name lowercased as the volume prefix
@@ -835,20 +835,20 @@ cleanup_temp() {
 }
 
 # ============================================================================
-# Cleanup — delete all active Barman backups
+# Cleanup — delete all active Backup backups
 # ============================================================================
 
 cleanup_barman() {
     echo ""
     echo -e "${BOLD}${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BOLD}${CYAN}║           Patroni HA Stack — Barman Backup Cleanup           ║${NC}"
+    echo -e "${BOLD}${CYAN}║           Patroni HA Stack — Backup Backup Cleanup           ║${NC}"
     echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
     local barman_status
-    barman_status=$(docker inspect --format='{{.State.Status}}' barman 2>/dev/null || echo "not_found")
+    barman_status=$(docker inspect --format='{{.State.Status}}' backup 2>/dev/null || echo "not_found")
     if [ "$barman_status" != "running" ]; then
-        echo -e "${RED}Error: barman container is not running (status: ${barman_status}).${NC}" >&2
+        echo -e "${RED}Error: backup container is not running (status: ${barman_status}).${NC}" >&2
         return 1
     fi
 
@@ -863,14 +863,14 @@ cleanup_barman() {
     for server in "${DB_NODES[@]}"; do
         # Calculate size of WAL archive, incoming, streaming, and error queues
         local wal_bytes
-        wal_bytes=$(docker exec barman sh -c "du -sb /data/pg-backup/${server}/wals /data/pg-backup/${server}/incoming /data/pg-backup/${server}/streaming /data/pg-backup/${server}/errors 2>/dev/null | awk '{s+=\$1} END {print s+0}'" 2>/dev/null || echo "0")
+        wal_bytes=$(docker exec backup sh -c "du -sb /data/pg-backup/${server}/wals /data/pg-backup/${server}/incoming /data/pg-backup/${server}/streaming /data/pg-backup/${server}/errors 2>/dev/null | awk '{s+=\$1} END {print s+0}'" 2>/dev/null || echo "0")
         wal_bytes=${wal_bytes:-0}
         total_wal_bytes=$((total_wal_bytes + wal_bytes))
         server_wal_sizes+=("$wal_bytes")
 
         # Calculate backups
         local server_backups
-        server_backups=$(docker exec barman barman list-backup "$server" 2>/dev/null || true)
+        server_backups=$(docker exec backup barman list-backup "$server" 2>/dev/null || true)
         if [ -n "$server_backups" ]; then
             while IFS= read -r line || [ -n "$line" ]; do
                 if [ -n "$line" ]; then
@@ -886,13 +886,13 @@ cleanup_barman() {
     done
 
     if [ "$total_backups" -eq 0 ] && [ "$total_wal_bytes" -eq 0 ]; then
-        echo -e "${GREEN}No Barman backups or archived WAL files found to clean up.${NC}"
+        echo -e "${GREEN}No Backup backups or archived WAL files found to clean up.${NC}"
         echo ""
         return 0
     fi
 
     if [ "$total_backups" -gt 0 ]; then
-        echo -e "${YELLOW}Found $total_backups active Barman backup(s):${NC}"
+        echo -e "${YELLOW}Found $total_backups active Backup backup(s):${NC}"
         for b in "${backups[@]}"; do
             echo -e "  - $b"
         done
@@ -907,24 +907,24 @@ cleanup_barman() {
     done
     echo ""
 
-    echo -e "${RED}${BOLD}⚠️  WARNING: YOU ARE ABOUT TO PURGE ALL BARMAN BACKUPS AND WAL ARCHIVES!${NC}"
-    echo -e "${RED}This operation is highly destructive and will reclaim all Barman volume space.${NC}"
+    echo -e "${RED}${BOLD}⚠️  WARNING: YOU ARE ABOUT TO PURGE ALL BACKUP BACKUPS AND WAL ARCHIVES!${NC}"
+    echo -e "${RED}This operation is highly destructive and will reclaim all Backup volume space.${NC}"
     echo -e "${RED}You will lose all ability to perform backups or Point-In-Time Recovery (PITR).${NC}"
     echo ""
 
     # Confirmation Gate
     local confirm=""
     if [ -t 0 ]; then
-        read -p "Are you absolutely sure you want to delete all Barman backups and WALs? (yes/NO): " confirm
+        read -p "Are you absolutely sure you want to delete all Backup backups and WALs? (yes/NO): " confirm
     else
         # If not a TTY, print warning and return an error to prevent accidental deletion
         echo -e "${RED}Error: Cannot prompt for confirmation (non-interactive shell).${NC}" >&2
-        echo -e "${RED}Barman backup deletion aborted for safety.${NC}" >&2
+        echo -e "${RED}Backup backup deletion aborted for safety.${NC}" >&2
         return 1
     fi
 
     if [ "$confirm" != "yes" ]; then
-        echo -e "${YELLOW}Barman backup cleanup cancelled.${NC}"
+        echo -e "${YELLOW}Backup backup cleanup cancelled.${NC}"
         echo ""
         return 0
     fi
@@ -940,7 +940,7 @@ cleanup_barman() {
             local server="${backup_servers[$i]}"
             local b_id="${backup_ids[$i]}"
             echo -e "  Deleting backup ${CYAN}$b_id${NC} for server ${CYAN}$server${NC}..."
-            if docker exec barman barman delete "$server" "$b_id" >/dev/null 2>&1; then
+            if docker exec backup backup delete "$server" "$b_id" >/dev/null 2>&1; then
                 echo -e "  ${GREEN}✓ Deleted $b_id (standard)${NC}"
                 deleted_count=$((deleted_count + 1))
             else
@@ -951,7 +951,7 @@ cleanup_barman() {
                 local base_dir="/data/pg-backup/${server}/base/${b_id}"
                 local meta_file="/data/pg-backup/${server}/meta/${b_id}-backup.info"
                 
-                if docker exec barman rm -rf "$base_dir" "$meta_file" >/dev/null 2>&1; then
+                if docker exec backup rm -rf "$base_dir" "$meta_file" >/dev/null 2>&1; then
                     echo -e "  ${GREEN}✓ Force-deleted $b_id files and metadata${NC}"
                     deleted_count=$((deleted_count + 1))
                 else
@@ -968,9 +968,9 @@ cleanup_barman() {
     for server in "${DB_NODES[@]}"; do
         echo -e "  Cleaning WALs and queues for ${CYAN}$server${NC}..."
         # Delete subdirectories/files inside wals, incoming, streaming, errors
-        if docker exec barman sh -c "find /data/pg-backup/${server}/wals/ /data/pg-backup/${server}/incoming/ /data/pg-backup/${server}/streaming/ /data/pg-backup/${server}/errors/ -mindepth 1 -delete 2>/dev/null || true"; then
+        if docker exec backup sh -c "find /data/pg-backup/${server}/wals/ /data/pg-backup/${server}/incoming/ /data/pg-backup/${server}/streaming/ /data/pg-backup/${server}/errors/ -mindepth 1 -delete 2>/dev/null || true"; then
             # Cleanly rebuild the index
-            docker exec barman barman rebuild-xlogdb "$server" >/dev/null 2>&1 &
+            docker exec backup backup rebuild-xlogdb "$server" >/dev/null 2>&1 &
             echo -e "  ${GREEN}✓ Purged WALs and queues for $server${NC}"
         else
             echo -e "  ${RED}✗ Failed to purge WALs for $server${NC}"
@@ -978,7 +978,7 @@ cleanup_barman() {
     done
 
     echo ""
-    echo -e "${GREEN}✓ Successfully completed Barman cleanup and fully reclaimed volume space.${NC}"
+    echo -e "${GREEN}✓ Successfully completed Backup cleanup and fully reclaimed volume space.${NC}"
     echo ""
 }
 

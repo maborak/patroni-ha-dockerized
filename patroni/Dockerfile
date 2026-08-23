@@ -5,6 +5,7 @@ FROM docker.io/library/postgres:${POSTGRES_VERSION}
 
 # Install dependencies
 RUN apt-get update && apt-get install -y \
+    pgbackrest \
     python3 \
     python3-pip \
     python3-psycopg2 \
@@ -25,7 +26,8 @@ ARG PATRONI_VERSION=4.1.5
 RUN pip3 install --break-system-packages --no-cache-dir "patroni[etcd3]==${PATRONI_VERSION}" psycopg2-binary
 
 # Create directories and set permissions
-RUN mkdir -p /etc/patroni /home/postgres/.ssh /etc/supervisor/conf.d /var/run/sshd /var/log/postgresql && \
+RUN mkdir -p /etc/patroni /home/postgres/.ssh /etc/supervisor/conf.d /var/run/sshd /var/log/postgresql /etc/pgbackrest /var/spool/pgbackrest && \
+    chown postgres:postgres /var/spool/pgbackrest 2>/dev/null || true && \
     chown -R postgres:postgres /etc/patroni /home/postgres/.ssh /var/log/postgresql && \
     chmod 700 /home/postgres/.ssh && \
     chmod 755 /var/log/postgresql

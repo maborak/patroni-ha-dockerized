@@ -13,37 +13,37 @@ chmod 700 "$POSTGRES_HOME/.ssh"
 chown postgres:postgres "$POSTGRES_HOME/.ssh"
 
 # Copy SSH key from mounted location to postgres home directory
-# This key will be used for all SSH connections (to Barman and other DB nodes)
-if [ -f /ssh_keys/barman_rsa ]; then
-    echo "Setting up SSH key for postgres user from /ssh_keys/barman_rsa..."
+# This key will be used for all SSH connections (to Backup and other DB nodes)
+if [ -f /ssh_keys/backup_rsa ]; then
+    echo "Setting up SSH key for postgres user from /ssh_keys/backup_rsa..."
     # Copy as id_rsa (default SSH key location)
-    cp /ssh_keys/barman_rsa "$POSTGRES_HOME/.ssh/id_rsa"
+    cp /ssh_keys/backup_rsa "$POSTGRES_HOME/.ssh/id_rsa"
     chmod 600 "$POSTGRES_HOME/.ssh/id_rsa"
     chown postgres:postgres "$POSTGRES_HOME/.ssh/id_rsa"
     echo "SSH key configured at $POSTGRES_HOME/.ssh/id_rsa"
     
-    # Also copy as barman_rsa for backward compatibility
-    cp /ssh_keys/barman_rsa "$POSTGRES_HOME/.ssh/barman_rsa"
-    chmod 600 "$POSTGRES_HOME/.ssh/barman_rsa"
-    chown postgres:postgres "$POSTGRES_HOME/.ssh/barman_rsa"
-    echo "SSH key also configured at $POSTGRES_HOME/.ssh/barman_rsa (for compatibility)"
+    # Also copy as backup_rsa for backward compatibility
+    cp /ssh_keys/backup_rsa "$POSTGRES_HOME/.ssh/backup_rsa"
+    chmod 600 "$POSTGRES_HOME/.ssh/backup_rsa"
+    chown postgres:postgres "$POSTGRES_HOME/.ssh/backup_rsa"
+    echo "SSH key also configured at $POSTGRES_HOME/.ssh/backup_rsa (for compatibility)"
     
     # Copy public key if available
-    if [ -f /ssh_keys/barman_rsa.pub ]; then
-        cp /ssh_keys/barman_rsa.pub "$POSTGRES_HOME/.ssh/id_rsa.pub"
+    if [ -f /ssh_keys/backup_rsa.pub ]; then
+        cp /ssh_keys/backup_rsa.pub "$POSTGRES_HOME/.ssh/id_rsa.pub"
         chmod 644 "$POSTGRES_HOME/.ssh/id_rsa.pub"
         chown postgres:postgres "$POSTGRES_HOME/.ssh/id_rsa.pub"
         echo "SSH public key configured at $POSTGRES_HOME/.ssh/id_rsa.pub"
     fi
 else
-    echo "WARNING: SSH key not found at /ssh_keys/barman_rsa"
+    echo "WARNING: SSH key not found at /ssh_keys/backup_rsa"
 fi
 
 # Add public key to authorized_keys so other nodes can connect to this node
-# This enables: Barman -> DB nodes, DB nodes -> DB nodes
-if [ -f /ssh_keys/barman_rsa.pub ]; then
+# This enables: Backup -> DB nodes, DB nodes -> DB nodes
+if [ -f /ssh_keys/backup_rsa.pub ]; then
     echo "Adding SSH public key to postgres authorized_keys in $POSTGRES_HOME/.ssh/..."
-    PUBKEY=$(cat /ssh_keys/barman_rsa.pub)
+    PUBKEY=$(cat /ssh_keys/backup_rsa.pub)
     if ! grep -q "$PUBKEY" "$POSTGRES_HOME/.ssh/authorized_keys" 2>/dev/null; then
         echo "$PUBKEY" >> "$POSTGRES_HOME/.ssh/authorized_keys"
     fi
@@ -55,13 +55,13 @@ fi
 # Set up SSH for root user as well (for root connections between containers)
 mkdir -p /root/.ssh
 chmod 700 /root/.ssh
-if [ -f /ssh_keys/barman_rsa ]; then
-    cp /ssh_keys/barman_rsa /root/.ssh/id_rsa
+if [ -f /ssh_keys/backup_rsa ]; then
+    cp /ssh_keys/backup_rsa /root/.ssh/id_rsa
     chmod 600 /root/.ssh/id_rsa
     echo "SSH key configured for root at /root/.ssh/id_rsa"
 fi
-if [ -f /ssh_keys/barman_rsa.pub ]; then
-    PUBKEY=$(cat /ssh_keys/barman_rsa.pub)
+if [ -f /ssh_keys/backup_rsa.pub ]; then
+    PUBKEY=$(cat /ssh_keys/backup_rsa.pub)
     if ! grep -q "$PUBKEY" /root/.ssh/authorized_keys 2>/dev/null; then
         echo "$PUBKEY" >> /root/.ssh/authorized_keys
     fi
@@ -77,7 +77,20 @@ chmod 700 /var/log/postgresql
 
 # Generate node-specific Patroni config from template
 if [ -f /etc/patroni/patroni.yml.tpl ]; then
-    NODE_NAME=$(hostname)
+    
+# ── Backup tooling: archive/restore commands per BACKUP_TOOL ──
+BACKUP_TOOL="${BACKUP_TOOL:-barman}"
+if [ "$BACKUP_TOOL" = "pgbackrest" ] && [ -f /etc/pgbackrest/pgbackrest.conf ]; then
+    ARCHIVE_COMMAND="pgbackrest --stanza=${HOSTNAME} archive-push %p"
+    RESTORE_COMMAND="pgbackrest --stanza=${HOSTNAME} archive-get %f \"%p\""
+    mkdir -p /var/spool/pgbackrest
+    chown postgres:postgres /var/spool/pgbackrest 2>/dev/null || true
+else
+    ARCHIVE_COMMAND="/usr/local/bin/archive-wal.sh %p %f"
+    RESTORE_COMMAND='rsync -e "ssh -i /var/lib/postgresql/.ssh/id_rsa -p 22 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" -a backup@backup:/data/pg-backup/'"${HOSTNAME}"'/wals/*/%f /tmp/%f 2>/dev/null && (gunzip -c /tmp/%f > %p 2>/dev/null || cp /tmp/%f %p) && rm -f /tmp/%f || exit 0'
+fi
+
+NODE_NAME=$(hostname)
     echo "Generating Patroni config for node: $NODE_NAME"
     python3 - << 'PYEOF'
 import os

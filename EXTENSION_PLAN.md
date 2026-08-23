@@ -32,7 +32,7 @@ These constraints come from how the repo actually works. Violating them breaks t
    `.env.example`.
 8. **Optional features are opt-in via `.env`** (e.g. `ENABLE_MONITORING=1`) so the default
    stack stays as lean as today. Prefer Compose `profiles:` for opt-in services.
-9. **Dynamic node count**: anything that references `db1..dbN` (HAProxy backends, Barman
+9. **Dynamic node count**: anything that references `db1..dbN` (HAProxy backends, Backup
    sections, scrape targets, log volumes) must be generated per-node in
    `generate_configs.sh` — copy the `WRITE_SERVERS`/`DB_SECTIONS` loop pattern.
 
@@ -46,7 +46,7 @@ These constraints come from how the repo actually works. Violating them breaks t
 | `pg_stat_statements` preloaded, `track=all` | same |
 | Data checksums at initdb, SCRAM-SHA-256 passwords | same (`initdb`, `password_encryption`) |
 | Health-checked routing + connection pooling | `configs/haproxy.cfg`, `configs/pgbouncer*.ini` |
-| Per-node WAL shipping to Barman + PITR wizard | `archive_command` in tpl, `scripts/pitr/` |
+| Per-node WAL shipping to Backup + PITR wizard | `archive_command` in tpl, `scripts/pitr/` |
 | Cross-cluster DR switchover (both directions, dry-run) | `scripts/ops/switchover_{to,from}_remote.sh` |
 | Health-check suite | `scripts/checks/check_stack.sh` (`make check`) |
 | Stress testing | `scripts/testing/stress_test_db.{sh,py}` |
@@ -92,13 +92,13 @@ Effort: M–L · can run parallel to Phase 1.
 
 | # | Task | Concrete implementation | Effort |
 |---|------|------------------------|--------|
-| 2.1 | **Fix SSH host-key checking (quick win)** | Today every SSH hop uses `-o StrictHostKeyChecking=no` (`archive_command` and `restore_command` in `templates/patroni.yml.tpl`, `ssh_command` generated in `barman.conf`). Extend `scripts/utils/setup_ssh_keys.sh` to also `ssh-keyscan barman dbN` into `ssh_keys/known_hosts` on first run and mount it read-only where needed; drop the `no` flags | S |
+| 2.1 | **Fix SSH host-key checking (quick win)** | Today every SSH hop uses `-o StrictHostKeyChecking=no` (`archive_command` and `restore_command` in `templates/patroni.yml.tpl`, `ssh_command` generated in `backup.conf`). Extend `scripts/utils/setup_ssh_keys.sh` to also `ssh-keyscan backup dbN` into `ssh_keys/known_hosts` on first run and mount it read-only where needed; drop the `no` flags | S |
 | 2.2 | **TLS for PostgreSQL** | `scripts/security/generate_certs.sh` (openssl): local CA + server certs with SAN `dbN`, output to gitignored `tls/` (mirrors `ssh_keys/` lifecycle). `TLS_ENABLED=1` gates: entrypoint substitutes `ssl_cert_file/ssl_key_file` params; `pg_hba` block switches `host` → `hostssl`; HAProxy backend `ssl`; PgBouncer `client_tls_sslmode`. Verify: `psql "sslmode=verify-full"` | M |
 | 2.3 | **TLS for etcd + Patroni REST API** | etcd peer/client certs wired through the generated `command:` in `docker-compose.yml.tpl`; `ETCD_HOSTS` switches to `https://`. Patroni `restapi` gains cert + `authkey` (or basic auth) so `/switchover`, `/failover` aren't anonymous | M |
-| 2.4 | **Backup encryption at rest** | Barman has no native encryption — don't fake it. Add a `restic` (or WAL-G w/ SSE) sidecar on the `barman_backup` volume, scheduled by the existing supervisord; `RESTIC_REPOSITORY`/`RESTIC_PASSWORD` in `.env`. `make backup` optionally triggers snapshot after success | M |
+| 2.4 | **Backup encryption at rest** | Backup has no native encryption — don't fake it. Add a `restic` (or WAL-G w/ SSE) sidecar on the `backup_repo` volume, scheduled by the existing supervisord; `RESTIC_REPOSITORY`/`RESTIC_PASSWORD` in `.env`. `make backup` optionally triggers snapshot after success | M |
 | 2.5 | **Credential rotation** | `make rotate-passwords WHAT=postgres\|replicator\|stats`: ALTER ROLE on leader → regenerate `userlist.txt` (`make generate`) → reload PgBouncer → update `.env` → verify replication (replicator password requires per-replica `ALTER ROLE` + restart). Runbook in `docs/security.md` | M |
 | 2.6 | **Vault integration (optional)** | Compose profile `vault`: dev-mode Vault + init container that fetches secrets at startup and materializes them for entrypoints; `.env` keeps only Vault address/token. High value only for shared/team deployments | L |
-| 2.7 | **Network segmentation** | Split `patroni_network` into `dcs_net` (etcd↔db), `backup_net` (db↔barman), `app_net` (haproxy/pgbouncer↔db); document required flows in `docs/architecture.md`. Pure template/generator change | S |
+| 2.7 | **Network segmentation** | Split `patroni_network` into `dcs_net` (etcd↔db), `backup_net` (db↔backup), `app_net` (haproxy/pgbouncer↔db); document required flows in `docs/architecture.md`. Pure template/generator change | S |
 
 **Deliverables:** `scripts/security/`, `tls/` (gitignored), template changes,
 `docs/security.md`, `.env.example` §10 SECURITY.
@@ -119,7 +119,7 @@ Effort: M · builds on Phase 1 (alerts) but works standalone.
 | 3.1 | **Chaos suite** | `scripts/chaos/` — one script per fault, all sourcing `lib/common.sh`: <br>• `kill_leader.sh` (docker kill → poll `detect_leader_api`)<br>• `kill_etcd.sh N` (quorum math assertion)<br>• `partition_node.sh NODE` (`docker network disconnect/connect` + reconnect timer)<br>• `fill_disk.sh NODE PCT` (fallocate on the data volume, cleanup trap)<br>• `pause_barman.sh` (WAL backlog drill)<br>Each prints PASS/FAIL verdict + timing; `make chaos [TEST=…]` runs all | M |
 | 3.2 | **Failover benchmark** | `scripts/testing/benchmark_failover.sh`: continuous write probe through HAProxy :5551 (`INSERT` with monotonic id) → kill leader → measure (a) time-to-new-leader, (b) time-to-first-successful-write, (c) lost ids (expect 0). Appends result row to `reports/failover_benchmark.tsv`. `make benchmark-failover [ROUNDS=3]` | S |
 | 3.3 | **Stress during failover** | Wire existing `stress_test_db.sh` into 3.2: `make benchmark-failover WITH_STRESS=1` starts pgbench-style load first, benchmarks under load | S |
-| 3.4 | **Backup verification (restore test)** | `scripts/backup/verify_backup.sh BACKUP_ID`: ephemeral `postgres:$POSTGRES_VERSION` container mounting `barman_backup`, runs `barman restore` → starts PG in single-user/recovery → sanity queries → checksum spot-check vs `pg_dump`. `make verify-backup [BACKUP_ID=latest]`. This is the only proof a backup is restorable | M |
+| 3.4 | **Backup verification (restore test)** | `scripts/backup/verify_backup.sh BACKUP_ID`: ephemeral `postgres:$POSTGRES_VERSION` container mounting `backup_repo`, runs `barman restore` → starts PG in single-user/recovery → sanity queries → checksum spot-check vs `pg_dump`. `make verify-backup [BACKUP_ID=latest]`. This is the only proof a backup is restorable | M |
 | 3.5 | **Scheduled PITR drill** | Cron-friendly non-interactive wrapper around 3.4 + `perform_pitr.sh --dry-run`, writing to `reports/pitr_drill_<ts>.log`; sample crontab documented in `docs/runbooks.md` | S |
 
 **Deliverables:** `scripts/chaos/`, extended `scripts/testing/`, `docs/chaos.md`,
@@ -143,12 +143,12 @@ Effort: item-dependent · pick per need.
 | # | Task | Concrete implementation | Effort |
 |---|------|------------------------|--------|
 | 4.1 | **Schema migration runner** | Flyway container (profile `migrations`), migrations dir bind-mounted from `./migrations`; `make migrate [ARGS="info"]` execs it against HAProxy :5551. Optional pre-flight `make backup` hook (`MIGRATE_BACKUP_FIRST=1`) | S |
-| 4.2 | **Formalized scaling** ✅ *done* | `make scale REPLICAS=5` → `scripts/ops/scale_cluster.sh` (grow: config regen + join + health wait + barman image rebuild; shrink: auto-switchover off doomed leader, typed confirmation, volume + Barman cleanup; `DRY_RUN`, `YES`, `SKIP_WAIT`, `TIMEOUT`). Sandboxed smoke test in `scripts/testing/smoke_test_scale.sh` | S |
+| 4.2 | **Formalized scaling** ✅ *done* | `make scale REPLICAS=5` → `scripts/ops/scale_cluster.sh` (grow: config regen + join + health wait + backup image rebuild; shrink: auto-switchover off doomed leader, typed confirmation, volume + Backup cleanup; `DRY_RUN`, `YES`, `SKIP_WAIT`, `TIMEOUT`). Sandboxed smoke test in `scripts/testing/smoke_test_scale.sh` | S |
 | 4.3 | **Rolling restart / minor-version updates** | `make rolling-restart`: per node (replicas first, leader last via switchover): stop → start → wait `streaming`/`running` → next. Safe for image bumps within same PG major | S |
 | 4.4 | **Major-version upgrade (16/17)** | Semi-automated `scripts/ops/upgrade_pg.sh TARGET=16` following the documented sequence: full backup → `pg_upgrade --link` on stopped leader datadir → bump `POSTGRES_VERSION` → reinit replicas one-by-one → verify. Ship as guarded runbook script + `docs/upgrades.md`; refuse to run without fresh `verify-backup` pass | L |
 | 4.5 | **Multi-environment** | `ENV=staging` support in `generate_configs.sh`: prefer `.env.$ENV` over `.env`, set `COMPOSE_PROJECT_NAME=patroni-$ENV` for volume/network isolation; `make status ENV=` aware. Wizard learns to write `.env.<name>` | M |
-| 4.6 | **Clone stack for dev/test** | `make clone NAME=clone1 [BACKUP_ID=…]`: second compose project (own ports/volumes) bootstrapped from a Barman restore — reuses 3.4 machinery. Cheap disposable environments | M |
-| 4.7 | **WAL-G / object-storage archiving** | Profile `walg` as alternative/complement to rsync-WAL-to-Barman: `WALG_S3_PREFIX`, incremental base backups, off-host copies. Keeps Barman PITR intact; adds cloud durability | L |
+| 4.6 | **Clone stack for dev/test** | `make clone NAME=clone1 [BACKUP_ID=…]`: second compose project (own ports/volumes) bootstrapped from a Backup restore — reuses 3.4 machinery. Cheap disposable environments | M |
+| 4.7 | **WAL-G / object-storage archiving** | Profile `walg` as alternative/complement to rsync-WAL-to-Backup: `WALG_S3_PREFIX`, incremental base backups, off-host copies. Keeps Backup PITR intact; adds cloud durability | L |
 | 4.8 | **pgBadger long-term archive** | After each parse cycle, tar + ship report/raw window to S3/restic repo (`PGBADGER_ARCHIVE_*` vars); extends the existing `collect.sh` cycle | S |
 
 **Deliverables:** `migrations/`, `scripts/maintenance/rolling_restart.sh`,
@@ -207,7 +207,7 @@ Phase 2 (Security) ───────┘                        └─► Pha
 ## Non-goals
 
 - Becoming a multi-host production deployment system as-shipped (single-host scope stays).
-- Replacing Barman/Patroni with CloudNativePG etc. inside this repo — that's Phase 5 territory.
+- Replacing Backup/Patroni with CloudNativePG etc. inside this repo — that's Phase 5 territory.
 - Touching the wizard UX before Phase 4.5 (multi-env) lands.
 
 ---

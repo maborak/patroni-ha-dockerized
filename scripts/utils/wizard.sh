@@ -19,7 +19,7 @@ source "$SCRIPT_DIR/../lib/versions.sh"
 
 PROJECT=${COMPOSE_PROJECT_NAME:-patroni-ha-dockerized}
 ENVF="$PROJECT_ROOT/.env"
-TOTAL_STEPS=7
+TOTAL_STEPS=8
 STEP=0
 
 if [ ! -t 0 ] && [ "${WIZARD_ALLOW_PIPED:-0}" != "1" ]; then
@@ -92,7 +92,9 @@ fi
 
 # Generate bin/ shims so every subsequent step (and the whole project) routes
 # through the selected engine.
-bash "$SCRIPT_DIR/../utils/setup_engine_shims.sh"
+if [ "${WIZARD_SKIP_SHIMS:-0}" != "1" ]; then
+    bash "$SCRIPT_DIR/../utils/setup_engine_shims.sh"
+fi
 
 # Dependency preflight BEFORE anything else: a fresh host without a usable
 # engine used to die here with a bare "command not found / Error 1".
@@ -182,7 +184,7 @@ final_summary() {
         echo -e "${YELLOW}Passwords (also stored in .env): postgres=${W_PASS} replicator=${W_RPASS}${NC}"
     fi
     echo "Next steps:"
-    [ "${IS_FRESH:-0}" = "1" ] && echo "  - make backup   # first Barman backup"
+    [ "${IS_FRESH:-0}" = "1" ] && echo "  - make backup   # first Backup backup"
     echo "  - make check    # full health check"
     echo "  - make status   # all endpoints + backups"
 }
@@ -305,6 +307,19 @@ gather_settings() {
         done
     fi
 
+    step "Backup tooling"
+    local def_tool
+    def_tool=$(env_get BACKUP_TOOL); def_tool=${def_tool:-pgbackrest}
+    while :; do
+        ask "Backup tool (barman | pgbackrest — recommended for new setups)" "$def_tool"
+        case "$ANSWER" in
+            barman|pgbackrest) W_BACKUP_TOOL="$ANSWER"; break ;;
+            *) fail_input "$ANSWER (barman or pgbackrest)" ;;
+        esac
+    done
+    [ "$W_BACKUP_TOOL" != "$def_tool" ] && [ "$IS_FRESH" = "0" ] && \
+        echo -e "${YELLOW}Note: switching tools on an existing stack orphans previous backups.${NC}"
+
     step "Software versions"
     # Bootstrap-bound components: changing PostgreSQL or etcd on an existing
     # stack means destroying every volume and bootstrapping from scratch —
@@ -355,7 +370,7 @@ gather_settings() {
         echo ""
         echo -e "${RED}${BOLD}⚠  VERSION SWITCH REQUIRES DESTROYING ALL DATA${NC}"
         echo "   PostgreSQL $def_pg → $W_POSTGRES_VERSION / etcd $def_etcd → $W_ETCD_VERSION"
-        echo "   Every volume goes away: ALL databases, Barman backups, pgBadger history."
+        echo "   Every volume goes away: ALL databases, Backup backups, pgBadger history."
         echo "   The cluster is then bootstrapped FRESH on the new versions."
         echo "   (Tip: 'make dump-db DB=<name>' first if you need a logical copy.)"
         local answer
@@ -394,7 +409,7 @@ gather_settings() {
     else
         echo "    - $([ "$IS_FRESH" = "1" ] && echo "Bootstrap a NEW cluster (leader election, ~1-2 min)" || echo "Restart the existing cluster from its data volumes")"
     fi
-    echo "    - Start 3 etcd, $((W_REPLICAS + 1)) PostgreSQL, HAProxy, 2 PgBouncer, Barman"
+    echo "    - Start 3 etcd, $((W_REPLICAS + 1)) PostgreSQL, HAProxy, 2 PgBouncer, Backup"
 }
 
 apply_settings() {
@@ -419,6 +434,7 @@ apply_settings() {
     env_set PGBOUNCER_PORT "$W_PGBOUNCER_PORT"
     env_set PGBOUNCER_RO_PORT "$W_PGBOUNCER_RO_PORT"
     env_set PATRONI_BASE_PORT "$W_BASE_PORT"
+    env_set BACKUP_TOOL "$W_BACKUP_TOOL"
     env_set POSTGRES_VERSION "$W_POSTGRES_VERSION"
     env_set PATRONI_VERSION "$W_PATRONI_VERSION"
     env_set ETCD_VERSION "$W_ETCD_VERSION"

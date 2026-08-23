@@ -7,7 +7,7 @@
 #
 # A version NOT listed here is rejected with an error — even if a matching
 # image tag exists upstream — because only listed combinations are tested
-# with this stack (Patroni ↔ PG, Barman ↔ PG, etcd ↔ Patroni DCS, ...).
+# with this stack (Patroni ↔ PG, Backup ↔ PG, etcd ↔ Patroni DCS, ...).
 #
 # When adding support for a new upstream release:
 #   1. Verify the exact image tag exists (quay.io / docker hub)

@@ -5,10 +5,10 @@
 # curl binaries (no Docker daemon, no running cluster):
 #
 #   1. grow   2 → 4 replicas (3 → 5 members): configs regenerate, compose up,
-#             barman image rebuild recorded, no volume deletion.
+#             backup image rebuild recorded, no volume deletion.
 #   2. shrink 4 → 1 replica  (5 → 2 members) with the leader (db5) among the
 #             removed nodes: switchover to db1, orphaned containers pruned,
-#             volumes + Barman data deleted, .env port entries cleaned.
+#             volumes + Backup data deleted, .env port entries cleaned.
 #   3. no-op  scale to current count: exits 0 without touching compose.
 #   4. dry-run: prints the plan, modifies nothing.
 #
@@ -39,7 +39,7 @@ make_sandbox() {
 
     cp -R "$ROOT/scripts" "$sb/scripts"
     cp -R "$ROOT/templates" "$sb/templates"
-    mkdir -p "$sb/configs" "$sb/barman" "$sb/bin" "$sb/state"
+    mkdir -p "$sb/configs" "$sb/backup" "$sb/bin" "$sb/state"
 
     # common.sh's _find_project_root needs a docker-compose.yml next to .env
     printf 'services: {}\n' > "$sb/docker-compose.yml"
@@ -73,7 +73,7 @@ LIST
     cat > "$sb/bin/docker" <<'EOF'
 #!/bin/sh
 LOG="${SHIM_LOG:?}"; STATE="${SHIM_STATE:?}"
-RUNNING="${SHIM_RUNNING:-db1 db2 db3 db4 db5 barman haproxy pgbadger etcd1}"
+RUNNING="${SHIM_RUNNING:-db1 db2 db3 db4 db5 backup haproxy pgbadger etcd1}"
 note() { echo "$*" >> "$LOG"; }
 if [ "$1" = "compose" ]; then
     shift
@@ -99,7 +99,7 @@ case "$1" in
         esac ;;
     exec)
         ct="$2"; shift 2
-        if [ "$ct" = "barman" ]; then
+        if [ "$ct" = "backup" ]; then
             note "BARMAN_EXEC $*"
             exit 0
         fi
@@ -188,12 +188,12 @@ grep -q '^PATRONI_DB5_PORT=15435$' "$SB/.env" \
 [ "$(haproxy_servers "$SB")" = "10" ] \
     && pass "haproxy.cfg has 10 server lines (5 write + 5 read)" \
     || fail "haproxy.cfg has $(haproxy_servers "$SB") server lines, expected 10"
-grep -q '^\[db5\]' "$SB/configs/barman.conf" \
-    && pass "barman.conf gained [db5] section" \
-    || fail "barman.conf missing [db5]"
-grep -q '^COMPOSE_BUILD barman$' "$LOG" \
-    && pass "barman image rebuilt (backup loop covers new nodes)" \
-    || fail "barman image not rebuilt" "$(cat "$LOG")"
+grep -q '^\[db5\]' "$SB/configs/backup.conf" \
+    && pass "backup.conf gained [db5] section" \
+    || fail "backup.conf missing [db5]"
+grep -q '^COMPOSE_BUILD backup$' "$LOG" \
+    && pass "backup image rebuilt (backup loop covers new nodes)" \
+    || fail "backup image not rebuilt" "$(cat "$LOG")"
 grep -q '^UP_CALL$' "$LOG" && pass "compose up invoked" || fail "compose up never invoked"
 grep -q 'VOLUME_RM' "$LOG" && fail "grow must not delete volumes" "$(grep VOLUME_RM "$LOG")" \
     || pass "no volumes deleted during grow"
@@ -228,9 +228,9 @@ grep -q '^PATRONI_REPLICAS=1$' "$SB/.env" \
 [ "$(haproxy_servers "$SB")" = "4" ] \
     && pass "haproxy.cfg has 4 server lines (2 write + 2 read)" \
     || fail "haproxy.cfg has $(haproxy_servers "$SB") server lines, expected 4"
-! grep -q '^\[db5\]' "$SB/configs/barman.conf" \
-    && pass "barman.conf no longer references db5" \
-    || fail "barman.conf still has [db5]"
+! grep -q '^\[db5\]' "$SB/configs/backup.conf" \
+    && pass "backup.conf no longer references db5" \
+    || fail "backup.conf still has [db5]"
 grep -q '^SWITCHOVER db1$' "$LOG" \
     && pass "switchover to surviving db1 performed" \
     || fail "expected switchover on db1" "$(cat "$LOG")"
@@ -242,8 +242,8 @@ grep -q 'smoketest_db5_data' "$LOG" \
     && pass "project-prefixed volume names matched" \
     || fail "volume name pattern missed prefixed names" "$(grep VOLUME_RM "$LOG")"
 grep -q 'BARMAN_EXEC.*rm -rf.*db5' "$LOG" \
-    && pass "Barman server data cleaned for removed nodes" \
-    || fail "Barman cleanup missing" "$(grep BARMAN_EXEC "$LOG")"
+    && pass "Backup server data cleaned for removed nodes" \
+    || fail "Backup cleanup missing" "$(grep BARMAN_EXEC "$LOG")"
 grep -q '^UP_CALL$' "$LOG" && pass "compose up invoked (orphans pruned)" || fail "compose up never invoked"
 grep -q 'All 2 members healthy' "$SB/out.log" \
     && pass "waited for 2/2 healthy members" \

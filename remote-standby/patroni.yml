@@ -56,7 +56,7 @@ bootstrap:
       port: 5551                   # HAProxy write port → current main leader
       primary_slot_name: standby_remote   # physical replication slot on main
       # create_replica_methods determines HOW the standby's leader pulls data.
-      # basebackup works over the VPN; barman-style methods would not (barman
+      # basebackup works over the VPN; backup-style methods would not (backup
       # is unreachable from the remote — it's behind Docker).
       create_replica_methods:
         - basebackup
@@ -73,8 +73,8 @@ bootstrap:
         max_connections: 100
         shared_buffers: 256MB              # CHECK: tune for remote host RAM
         effective_cache_size: 1GB          # CHECK: tune for remote host RAM
-        # CRITICAL: archive_mode OFF on the standby — the barman archive_command
-        # in the main template would try to rsync to "barman" hostname which
+        # CRITICAL: archive_mode OFF on the standby — the backup archive_command
+        # in the main template would try to rsync to "backup" hostname which
         # doesn't resolve from the remote. The standby doesn't need to archive.
         archive_mode: 'off'
         shared_preload_libraries: 'pg_stat_statements'

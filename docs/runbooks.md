@@ -192,13 +192,13 @@ split-brain becomes possible.
 
 ## Runbook: Backup Workflow
 
-**Goal**: create a Barman base backup and verify it is usable.
+**Goal**: create a Backup base backup and verify it is usable.
 
 **Preconditions:**
 
 - ✅ Cluster is healthy (`make check`)
-- ✅ Barman is reachable and SSH connectivity works (`make test-ssh`)
-- ✅ Sufficient disk space on the Barman volume (`make disk`)
+- ✅ Backup is reachable and SSH connectivity works (`make test-ssh`)
+- ✅ Sufficient disk space on the Backup volume (`make disk`)
 
 ### Steps
 
@@ -217,7 +217,7 @@ make list-backups SERVER=db1           # explicit server
 make show-backups SERVER=db1 BACKUP_ID=20260123T120000
 ```
 
-**4. Verify Barman server health:** `docker exec barman barman check db1`
+**4. Verify Backup server health:** `docker exec backup barman check db1`
 
 **5. Optional — logical dumps as a complement:**
 `make dump-db DB=mydb NODE=db3` (logical `.tgz` dump from a healthy replica),
@@ -227,11 +227,11 @@ make show-backups SERVER=db1 BACKUP_ID=20260123T120000
 
 If the backup fails:
 
-1. Check Barman logs: `docker logs barman --tail 50`
+1. Check Backup logs: `docker logs backup --tail 50`
 2. Check disk space: `make disk`
 3. Check SSH connectivity (the usual culprit for WAL archiving failures):
    `make test-ssh` (equivalent direct script:
-   `bash scripts/utils/test_ssh_to_barman.sh`)
+   `bash scripts/utils/test_ssh_to_backup.sh`)
 4. Retry: `make backup`
 
 ### Red Flags / Do Not Do This
@@ -268,7 +268,7 @@ it walks you through choosing a backup, target time, server, and target node via
 
 ```bash
 make pitr BACKUP_ID=20260123T120000 TARGET_TIME='2026-01-23 12:30:00' \
-  SERVER=db1 TARGET=db2 RESTORE=1 AUTO_START=1 WAL_METHOD=barman-wal-restore
+  SERVER=db1 TARGET=db2 RESTORE=1 AUTO_START=1 WAL_METHOD=backup-wal-restore
 ```
 
 **3. Monitor recovery:** `make monitor-recovery NODE=db2`
@@ -349,7 +349,7 @@ health gating (`make scale`, powered by `scripts/ops/scale_cluster.sh`).
 
 - ✅ Stack is running and healthy (`make check`)
 - ✅ For shrink: you accept permanent loss of the removed nodes' data,
-  volumes, and Barman backups for those servers
+  volumes, and Backup backups for those servers
 - ✅ Sufficient disk space when growing (each new node clones the dataset)
 
 ### Grow (add replicas)
@@ -358,7 +358,7 @@ health gating (`make scale`, powered by `scripts/ops/scale_cluster.sh`).
 touching anything.
 
 **2. Apply:** `make scale REPLICAS=5` — regenerates configs, appends port
-entries to `.env`, starts the new nodes, rebuilds the Barman image so its
+entries to `.env`, starts the new nodes, rebuilds the Backup image so its
 backup loop covers them, then waits until every member reports
 `running`/`streaming` (timeout `TIMEOUT=900` by default; new nodes clone the
 leader via basebackup, which takes longer on large datasets).
@@ -378,7 +378,7 @@ anything if the promotion doesn't complete.
 **2. Apply:** `make scale REPLICAS=2` — type `SCALE` to confirm (or `YES=1`
 for unattended runs). After `compose up --remove-orphans` prunes the orphaned
 containers, the script deletes their `_data`/`_logs` volumes and the matching
-Barman server data.
+Backup server data.
 
 **3. Verify:** `make status`; confirm HAProxy/PgBouncer still serve reads and
 writes (`make psql`, `make psql-read`).
@@ -386,7 +386,7 @@ writes (`make psql`, `make psql-read`).
 ### Rollback
 
 - **Grow**: `make scale REPLICAS=<old> YES=1` removes what was added.
-- **Shrink**: deleted volumes are gone — restore from Barman backups of a
+- **Shrink**: deleted volumes are gone — restore from Backup backups of a
   surviving server by rejoining the node as a fresh replica
   (`PATRONI_REPLICAS=<old> make up`), or PITR if needed.
 
@@ -395,8 +395,8 @@ writes (`make psql`, `make psql-read`).
 ❌ **Do not shrink during heavy write load or an in-progress PITR/backup.**
 
 ❌ **Do not edit `PATRONI_REPLICAS` in `.env` manually while the cluster runs** —
-use `make scale`, which also cleans up ports, volumes, and Barman state.
-(Manual edit + `make up` still works for grow, but skips volume/Barman hygiene.)
+use `make scale`, which also cleans up ports, volumes, and Backup state.
+(Manual edit + `make up` still works for grow, but skips volume/Backup hygiene.)
 
 ❌ **Do not shrink below 2 members** for anything beyond throwaway experiments —
 a single-node cluster has no failover protection.
@@ -417,7 +417,7 @@ a single-node cluster has no failover protection.
 
 This runs `scripts/checks/check_stack.sh`, which validates (see [docs/checks.md](checks.md) for
 the full list): containers, etcd health per member, Patroni API roles,
-split-brain detection, replication lag, Barman status per server, PostgreSQL and
+split-brain detection, replication lag, Backup status per server, PostgreSQL and
 PgBouncer readiness, HAProxy config, SSH keys/connectivity, and exposed ports.
 
 **2. Review cluster status and endpoints:** `make status`
@@ -469,12 +469,12 @@ docker logs db2 --tail 100
 
 ### Issue: WAL Archiving Failing
 
-**Symptoms**: archive command errors in PostgreSQL logs; Barman reports failures
+**Symptoms**: archive command errors in PostgreSQL logs; Backup reports failures
 or missing WALs; `make check-archive` complains.
 
 **Diagnosis**: `make check-archive`, `make test-ssh` (runs
-`scripts/utils/test_ssh_to_barman.sh` and the reverse path),
-`docker exec barman barman status db1`.
+`scripts/utils/test_ssh_to_backup.sh` and the reverse path),
+`docker exec backup backup status db1`.
 
 **Fix**: regenerate/verify SSH keys if needed (`make setup-keys`, then
 `make generate` to regenerate configs including key distribution), then retry
@@ -566,14 +566,14 @@ Run `make help` for the always-current list. Most-used targets:
 | `make status` | Cluster status + all access endpoints + recent backups |
 | `make info` | Detailed stack info (`FORMAT=json` optional) |
 | `make leader` | Show current leader node |
-| `make disk` | Disk usage (`CLEANUP=logs\|dumps\|docker\|snapshots\|temp\|barman\|all`, `KEEP_DAYS=N`, `DRYRUN=1`) |
+| `make disk` | Disk usage (`CLEANUP=logs\|dumps\|docker\|snapshots\|temp\|backup\|all`, `KEEP_DAYS=N`, `DRYRUN=1`) |
 | `make smoke-test` | Sandboxed end-to-end tests of the tooling (no Docker needed) |
 
 ### Backup & Recovery
 
 | Target | Description |
 |---|---|
-| `make backup` | Barman base backup (`SERVER=dbN` optional; auto-detects leader) |
+| `make backup` | Backup base backup (`SERVER=dbN` optional; auto-detects leader) |
 | `make list-backups` | List backups (auto-detects leader, or `SERVER=dbN`) |
 | `make show-backups` | Backup details: `SERVER=dbN BACKUP_ID=<id>` |
 | `make check-archive` | WAL archiving status on the leader |
@@ -604,7 +604,7 @@ Run `make help` for the always-current list. Most-used targets:
 | `make reinit` | Reinitialize a replica (`NODE=db2`; type `REINIT` to confirm) |
 | `make failover` | **Emergency** force failover (`NEW_LEADER=db2`; type `FAILOVER` to confirm) |
 | `make switchover-to-remote` / `make switchover-from-remote` | Cross-cluster switchover (`YES=1 DRY_RUN=1 SKIP_BACKUP=1`; see [docs/switchover.md](switchover.md)) |
-| `make test-ssh` / `make test-connectivity` | SSH / PostgreSQL connectivity tests to Barman |
+| `make test-ssh` / `make test-connectivity` | SSH / PostgreSQL connectivity tests to Backup |
 | `make config` | Show current configuration (ports, `.env`) |
 
 ---
@@ -614,7 +614,7 @@ Run `make help` for the always-current list. Most-used targets:
 ### Destroy / Reset the Stack
 
 `make destroy` removes **all** containers, volumes (PostgreSQL data, etcd state,
-Barman backups and WAL archives). There is no undo.
+Backup backups and WAL archives). There is no undo.
 
 - Interactive safety: you must type `DESTROY` to confirm.
 - `make destroy YES=1` skips the confirmation prompt (for scripting).
@@ -654,7 +654,7 @@ Barman backups and WAL archives). There is no undo.
 **Before maintenance:**
 
 - [ ] Create a backup: `make backup`
-- [ ] Verify the backup: `docker exec barman barman check db1` and `make list-backups`
+- [ ] Verify the backup: `docker exec backup barman check db1` and `make list-backups`
 - [ ] Verify cluster health: `make check`
 - [ ] Document current cluster state: `make status` (save the output)
 - [ ] Notify stakeholders and schedule the window
@@ -678,7 +678,7 @@ Barman backups and WAL archives). There is no undo.
 
 - **Patroni REST API**: https://patroni.readthedocs.io/en/latest/rest_api.html
 - **PostgreSQL High Availability**: https://www.postgresql.org/docs/current/high-availability.html
-- **Barman Operations**: https://www.pgbarman.org/documentation/
+- **Backup Operations**: https://www.pgbarman.org/documentation/
 - **PITR (canonical)**: [docs/pitr.md](pitr.md)
 - **Health checks (canonical)**: [docs/checks.md](checks.md)
 - **Cross-cluster switchover**: [docs/switchover.md](switchover.md)

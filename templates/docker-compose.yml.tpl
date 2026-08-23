@@ -37,6 +37,7 @@ services:
       - PG_DEFAULT_STATISTICS_TARGET=${PG_DEFAULT_STATISTICS_TARGET:-100}
       - PG_LOG_MIN_DURATION_STATEMENT=${PG_LOG_MIN_DURATION_STATEMENT:-250ms}
       - PG_LOG_STATEMENT=${PG_LOG_STATEMENT:-ddl}
+      - BACKUP_TOOL=${BACKUP_TOOL:-barman}
     networks:
       - patroni_network
     depends_on:
@@ -51,15 +52,15 @@ __ETCD_DEPENDS__
 
 __DB_SERVICES__
 
-  # Barman backup server
-  barman:
+  # Backup backup server
+  backup:
     build:
-      context: ./barman
-      dockerfile: Dockerfile
+      context: ./backup
+      dockerfile: __BACKUP_DOCKERFILE__
       args:
         POSTGRES_VERSION: "__BA_POSTGRES_VERSION__"
-    container_name: barman
-    hostname: barman
+    container_name: backup
+    hostname: backup
     environment:
       - BARMAN_SERVER_NAME=main
       - PATRONI_REPLICAS=${PATRONI_REPLICAS:-2}
@@ -68,17 +69,17 @@ __DB_SERVICES__
     ports:
       - "${BARMAN_PORT}:5432"
     volumes:
-      - barman_data:/var/lib/barman
-      - barman_backup:/data/pg-backup
-      - ./configs/barman.conf:/etc/barman.conf:ro
-      - ./ssh_keys/barman_rsa:/ssh_keys/barman_rsa:ro
-      - ./ssh_keys/barman_rsa.pub:/ssh_keys/barman_rsa.pub:ro
+      - backup_data:/var/lib/backup
+      - backup_repo:/data/pg-backup
+      __BACKUP_CONF_MOUNT__
+      - ./ssh_keys/backup_rsa:/ssh_keys/backup_rsa:ro
+      - ./ssh_keys/backup_rsa.pub:/ssh_keys/backup_rsa.pub:ro
     networks:
       - patroni_network
     depends_on:
 __DB_DEPENDS_ON_HEALTHY__
     healthcheck:
-      test: ["CMD-SHELL", "barman check db1 --nagios 2>/dev/null || exit 1"]
+      test: __BACKUP_HEALTHCHECK__
       interval: 30s
       timeout: 10s
       retries: 3
@@ -202,7 +203,7 @@ networks:
 volumes:
 __ETCD_VOLUMES__
 __DB_VOLUMES__
-  barman_data:
-  barman_backup:
+  backup_data:
+  backup_repo:
   pgbadger_raw:
   pgbadger_reports:

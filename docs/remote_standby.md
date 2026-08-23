@@ -95,7 +95,7 @@ On the standby host (`<remote-host>`), create the configuration file (e.g., `/et
 | `pg_hba` subnet entries | Replace `<your-subnet>/24` with the standby network's actual subnet. |
 
 > [!IMPORTANT]
-> The template keeps `archive_mode: 'off'` on the standby. Standby clusters do not manage WAL archival (e.g. Barman) — do not carry the primary's `archive_command` over.
+> The template keeps `archive_mode: 'off'` on the standby. Standby clusters do not manage WAL archival (e.g. Backup) — do not carry the primary's `archive_command` over.
 
 ---
 

@@ -39,6 +39,8 @@ PATRONI_BASE_PORT=${PATRONI_BASE_PORT:-15431}
 PATRONI_API_BASE_PORT=${PATRONI_API_BASE_PORT:-8001}
 HAPROXY_STATS_USER=${HAPROXY_STATS_USER:-admin}
 HAPROXY_STATS_PASSWORD=${HAPROXY_STATS_PASSWORD:-haproxy_stats_secret}
+BACKUP_TOOL=${BACKUP_TOOL:-barman}
+case "$BACKUP_TOOL" in barman|pgbackrest) ;; *) echo "ERROR: unsupported BACKUP_TOOL=$BACKUP_TOOL" >&2; exit 1;; esac
 BARMAN_RETENTION_POLICY=${BARMAN_RETENTION_POLICY:-RECOVERY WINDOW OF 7 DAYS}
 BARMAN_BANDWIDTH_LIMIT=${BARMAN_BANDWIDTH_LIMIT:-50000}
 BARMAN_PARALLEL_JOBS=${BARMAN_PARALLEL_JOBS:-4}
@@ -183,7 +185,7 @@ content = content.replace('__HAPROXY_STATS_PASSWORD__', """${HAPROXY_STATS_PASSW
 with open('${PROJECT_ROOT}/configs/haproxy.cfg', 'w') as f:
     f.write(content)
 PYEOF
-# --- Generate barman.conf ---
+# --- Generate backup.conf ---
 DB_SECTIONS=""
 for i in $(seq 1 $PATRONI_NODES); do
     SECTION="###########################################
@@ -205,20 +207,20 @@ ${SECTION}"
 done
 
 python3 << PYEOF
-with open('${TEMPLATE_DIR}/barman.conf.tpl', 'r') as f:
+with open('${TEMPLATE_DIR}/backup.conf.tpl', 'r') as f:
     content = f.read()
 content = content.replace('__DB_SECTIONS__', """${DB_SECTIONS}""")
 content = content.replace('__BARMAN_RETENTION_POLICY__', """${BARMAN_RETENTION_POLICY}""")
 content = content.replace('__BARMAN_BANDWIDTH_LIMIT__', """${BARMAN_BANDWIDTH_LIMIT}""")
 content = content.replace('__BARMAN_PARALLEL_JOBS__', """${BARMAN_PARALLEL_JOBS}""")
-with open('${PROJECT_ROOT}/configs/barman.conf', 'w') as f:
+with open('${PROJECT_ROOT}/configs/backup.conf', 'w') as f:
     f.write(content)
 PYEOF
 
-# --- Generate barman/supervisord.conf ---
+# --- Generate backup/supervisord.conf ---
 BACKUP_SERVERS=$(echo $NODES | xargs)  # trim whitespace
 sed "s/__BACKUP_SERVERS__/${BACKUP_SERVERS}/" \
-    "$TEMPLATE_DIR/barman-supervisord.conf.tpl" > "$PROJECT_ROOT/barman/supervisord.conf"
+    "$TEMPLATE_DIR/backup-supervisord.conf.tpl" > "$PROJECT_ROOT/backup/supervisord.conf"
 
 # --- Generate pgbouncer configs ---
 PGBOUNCER_POOL_MODE=${PGBOUNCER_POOL_MODE:-transaction}
@@ -245,6 +247,58 @@ with open('${PROJECT_ROOT}/configs/${INI}', 'w') as f:
     f.write(content)
 PYEOF2
 done
+
+# --- Backup-tool specific artifacts -----------------------------------------
+BACKUP_DOCKERFILE="Dockerfile.barman"
+BACKUP_CONF_FILE="configs/backup.conf"
+BACKUP_CONF_MOUNT='- ./configs/backup.conf:/etc/barman.conf:ro'
+BACKUP_HEALTHCHECK='test: ["CMD-SHELL", "barman check db1 --nagios 2>/dev/null || exit 1"]'
+
+if [ "$BACKUP_TOOL" = "pgbackrest" ]; then
+    BACKUP_DOCKERFILE="Dockerfile.pgbackrest"
+    BACKUP_CONF_FILE="configs/pgbackrest-repo.conf"
+    BACKUP_CONF_MOUNT='- ./configs/pgbackrest-repo.conf:/etc/pgbackrest/pgbackrest.conf:ro'
+    BACKUP_HEALTHCHECK='test: ["CMD-SHELL", "pgbackrest info db1 >/dev/null 2>&1 || exit 1"]'
+fi
+
+# Render pgBackRest config (shared: mounted on backup host AND every node).
+if [ "$BACKUP_TOOL" = "pgbackrest" ]; then
+    PG_VER="${POSTGRES_VERSION:-18}"
+    STANZAS=""
+    for i in $(seq 1 $PATRONI_NODES); do
+        STANZAS="${STANZAS}[db${i}]
+pg1-host=db${i}
+pg1-host-user=${POSTGRES_USER:-postgres}
+pg1-port=5431
+pg1-path=/var/lib/postgresql/${PG_VER}/${PATRONI_CLUSTER_NAME}
+
+"
+    done
+    export STANZAS TEMPLATE_DIR PROJECT_ROOT
+    python3 << 'PYBACKEND'
+import os
+with open(os.environ['TEMPLATE_DIR'] + '/pgbackrest.conf.tpl') as f:
+    c = f.read()
+c = c.replace('__PG_BACKUP_RETENTION_FULL__', os.environ.get('BACKUP_RETENTION_FULL', '2'))
+c = c.replace('__REPO_HOST_LINES__', '# Node-side only: where the repository lives\nrepo1-host=backup')
+c = c.replace('__STANZAS__', os.environ['STANZAS'])
+with open(os.environ['PROJECT_ROOT'] + '/configs/pgbackrest.conf', 'w') as f:
+    f.write(c)
+import re
+repo = re.sub(r'^repo1-host=.*\n', '', c, flags=re.M)
+with open(os.environ['PROJECT_ROOT'] + '/configs/pgbackrest-repo.conf', 'w') as f:
+    f.write(repo)
+PYBACKEND
+fi
+
+# Supervisord per tool
+if [ "$BACKUP_TOOL" = "pgbackrest" ]; then
+    sed "s/__BACKUP_SERVERS__/${BACKUP_SERVERS}/" \
+        "$TEMPLATE_DIR/backup-supervisord-pgbackrest.conf.tpl" > "$PROJECT_ROOT/backup/supervisord.conf"
+else
+    sed "s/__BACKUP_SERVERS__/${BACKUP_SERVERS}/" \
+        "$TEMPLATE_DIR/backup-supervisord.conf.tpl" > "$PROJECT_ROOT/backup/supervisord.conf"
+fi
 
 # --- Generate etcd services ---
 ETCD_INITIAL_CLUSTER=""
@@ -323,8 +377,9 @@ for i in $(seq 1 $PATRONI_NODES); do
       - db${i}_logs:/var/log/postgresql
       - ./templates/patroni.yml.tpl:/etc/patroni/patroni.yml.tpl:ro
       - ./scripts:/etc/patroni/scripts:ro
-      - ./ssh_keys/barman_rsa:/ssh_keys/barman_rsa:ro
-      - ./ssh_keys/barman_rsa.pub:/ssh_keys/barman_rsa.pub:ro"
+__NODE_BACKUP_CONF_MOUNT__
+      - ./ssh_keys/backup_rsa:/ssh_keys/backup_rsa:ro
+      - ./ssh_keys/backup_rsa.pub:/ssh_keys/backup_rsa.pub:ro"
     if [ -n "$DB_SERVICES" ]; then
         DB_SERVICES="${DB_SERVICES}
 
@@ -367,7 +422,9 @@ ${LOG_VOL_ENTRY}"
 done
 
 # Write intermediate files for python to read (avoids shell quoting issues)
-printf '%s' "$DB_SERVICES" > /tmp/_gen_db_services.txt
+NODE_BACKUP_CONF_MOUNT=""
+[ "$BACKUP_TOOL" = "pgbackrest" ] && NODE_BACKUP_CONF_MOUNT='      - ./configs/pgbackrest.conf:/etc/pgbackrest/pgbackrest.conf:ro'
+printf '%s' "$(printf '%s' "$DB_SERVICES" | sed "s|__NODE_BACKUP_CONF_MOUNT__|$NODE_BACKUP_CONF_MOUNT|")" > /tmp/_gen_db_services.txt
 printf '%s' "$DB_DEPENDS_ON" > /tmp/_gen_db_depends.txt
 printf '%s' "$DB_VOLUMES" > /tmp/_gen_db_volumes.txt
 printf '%s' "$PGBADGER_LOG_VOLUMES" > /tmp/_gen_pgbadger_vols.txt
@@ -405,6 +462,9 @@ content = content.replace('__BA_POSTGRES_VERSION__', """${POSTGRES_VERSION}""")
 content = content.replace('__BA_PATRONI_VERSION__', """${PATRONI_VERSION}""")
 content = content.replace('__BA_ALPINE_VERSION__', """${ALPINE_VERSION:-3.22}""")
 content = content.replace('__BA_PGBADGER_VERSION__', """${PGBADGER_VERSION}""")
+content = content.replace('__BACKUP_DOCKERFILE__', """${BACKUP_DOCKERFILE}""")
+content = content.replace('__BACKUP_CONF_MOUNT__', """${BACKUP_CONF_MOUNT}""")
+content = content.replace('__BACKUP_HEALTHCHECK__', """${BACKUP_HEALTHCHECK}""")
 with open('${PROJECT_ROOT}/docker-compose.yml', 'w') as f:
     f.write(content)
 PYEOF
@@ -455,6 +515,10 @@ with open('${PROJECT_ROOT}/.env.example', 'w') as f:
     f.write(content)
 PYEOF
 rm -f /tmp/_gen_port_entries.txt /tmp/_gen_etcd_port_entries.txt
+
+if [ -f "$PROJECT_ROOT/.env" ] && ! grep -qE '^BACKUP_TOOL=' "$PROJECT_ROOT/.env"; then
+    printf '\n# Backup tooling: barman | pgbackrest\nBACKUP_TOOL=%s\n' "$BACKUP_TOOL" >> "$PROJECT_ROOT/.env"
+fi
 
 # --- Update .env port entries ---
 if [ -f "$PROJECT_ROOT/.env" ]; then
@@ -529,10 +593,10 @@ fi
 echo ""
 echo "Generated configs for $PATRONI_NODES nodes:"
 echo "  configs/haproxy.cfg"
-echo "  configs/barman.conf"
+echo "  configs/backup.conf"
 echo "  configs/pgbouncer.ini"
 echo "  configs/pgbouncer-ro.ini"
-echo "  barman/supervisord.conf"
+echo "  backup/supervisord.conf"
 echo "  docker-compose.yml"
 echo "  .env.example"
 echo ""

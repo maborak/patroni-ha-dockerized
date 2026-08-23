@@ -8,7 +8,7 @@ Manual procedure for swapping which Patroni cluster is the primary, between the 
 make switchover-to-remote    # Mac → Remote (forward)  — implements Section A
 make switchover-from-remote  # Remote → Mac (reverse)  — implements Section B
 # Flags (both targets): YES=1 (skip confirmations) · DRY_RUN=1 (rehearse, change
-# nothing) · SKIP_BACKUP=1 (skip the pre-switchover Barman backup)
+# nothing) · SKIP_BACKUP=1 (skip the pre-switchover Backup backup)
 ```
 
 Backed by `scripts/ops/switchover_to_remote.sh`, `scripts/ops/switchover_from_remote.sh`, and `scripts/ops/lib/cross_cluster.sh`. All remote endpoints come from `.env` §8 (`REMOTE_*`, `MAC_VPN_HOST`) — see the glossary below.
@@ -137,15 +137,15 @@ docker exec db1 psql -U postgres -h localhost -p 5431 -t -A -c "SHOW synchronous
 ```
 If the value is anything but `on`, STOP. To fix it: `patronictl -c /etc/patroni/patroni.yml edit-config` and set `postgresql.parameters.synchronous_commit: on` (NOTE: `patronictl edit-config` shows flat DCS contents — `postgresql:` is a top-level key, NOT under `bootstrap.dcs:`). Save, wait a checkpoint. Or accept that you may lose recent writes — then this is not a clean switchover but a partial-data DR procedure.
 
-### 0.7 Take a fresh Barman backup of the current primary (recommended)
+### 0.7 Take a fresh Backup backup of the current primary (recommended)
 Not strictly required but **strongly recommended for production**. Gives you a fallback if everything goes wrong (the `make` targets do this unless you pass `SKIP_BACKUP=1`):
 ```bash
 # From the Mac side (when Mac is the primary)
 make backup SERVER=db1
 
 # Verify the backup
-docker exec barman barman list-backup db1 | head -3
-docker exec barman barman check db1
+docker exec backup barman list-backup db1 | head -3
+docker exec backup barman check db1
 ```
 A successful backup means: even if both clusters end up corrupted, you can restore from this checkpoint via PITR. See `docs/pitr.md`.
 
@@ -850,7 +850,7 @@ Pin this to the wall. All values resolve from `.env` §8; if `REMOTE_PGBOUNCER_H
 ## Section E — Pre-existing operational guidance
 
 **Do not run these procedures during:**
-- Active backups (Barman or `make backup`) — the WAL stream is in use
+- Active backups (Backup or `make backup`) — the WAL stream is in use
 - Long-running transactions on the current primary — they may abort
 - Schema migrations
 - Any period when lag is non-zero
@@ -888,7 +888,7 @@ Everything above is automated. Prefer the make targets; this runbook doubles as 
 - `make switchover-to-remote` → runs `scripts/ops/switchover_to_remote.sh` (Section A)
 - `make switchover-from-remote` → runs `scripts/ops/switchover_from_remote.sh` (Section B)
 - Shared helpers (PSQL wrappers, DCS get/put, write-block/unblock, slot management): `scripts/ops/lib/cross_cluster.sh`
-- Flags: `YES=1` (skip interactive confirmation) · `DRY_RUN=1` (print every action, change nothing) · `SKIP_BACKUP=1` (skip the pre-switchover Barman backup)
+- Flags: `YES=1` (skip interactive confirmation) · `DRY_RUN=1` (print every action, change nothing) · `SKIP_BACKUP=1` (skip the pre-switchover Backup backup)
 - App-role handling: set `APP_ROLES="role1 role2"` in `.env` and the REVOKE/GRANT steps (§A.1.5 / §A.4.5) run over that list automatically — no per-role SQL editing. The `app_writers` group trick from §0.8 remains an option.
 
 **Preflights the script runs before touching anything** (all fail-fast, implemented in `cross_cluster.sh` — the manual §0 equivalents):

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Test Barman SSH connectivity to Patroni nodes
+# Test Backup SSH connectivity to Patroni nodes
 
 set -e
 
@@ -8,37 +8,37 @@ source "$SCRIPT_DIR/../lib/common.sh"
 cd "$SCRIPT_DIR/../"
 
 echo -e "${BLUE}========================================${NC}"
-echo -e "${BLUE}  Testing Barman SSH to Patroni Nodes${NC}"
+echo -e "${BLUE}  Testing Backup SSH to Patroni Nodes${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo ""
 
 # Check if containers are running
-if ! docker ps --format '{{.Names}}' | grep -q "^barman$"; then
-    echo -e "${RED}ERROR: Barman container is not running!${NC}"
+if ! docker ps --format '{{.Names}}' | grep -q "^backup$"; then
+    echo -e "${RED}ERROR: Backup container is not running!${NC}"
     exit 1
 fi
 
-# Check Barman's private SSH key
-echo -e "${YELLOW}Checking Barman's private SSH key...${NC}"
-BARMAN_HOME=$(docker exec barman getent passwd barman | cut -d: -f6)
+# Check Backup's private SSH key
+echo -e "${YELLOW}Checking Backup's private SSH key...${NC}"
+BARMAN_HOME=$(docker exec backup getent passwd backup | cut -d: -f6)
 if [ -z "$BARMAN_HOME" ]; then
-    BARMAN_HOME="/var/lib/barman"
+    BARMAN_HOME="/var/lib/backup"
 fi
 
-if docker exec barman test -f "$BARMAN_HOME/.ssh/id_rsa" 2>/dev/null; then
-    echo -e "${GREEN}✓ Barman private SSH key exists${NC}"
-    KEY_PERMS=$(docker exec barman stat -c "%a" "$BARMAN_HOME/.ssh/id_rsa" 2>/dev/null || docker exec barman ls -l "$BARMAN_HOME/.ssh/id_rsa" 2>/dev/null | awk '{print $1}')
+if docker exec backup test -f "$BARMAN_HOME/.ssh/id_rsa" 2>/dev/null; then
+    echo -e "${GREEN}✓ Backup private SSH key exists${NC}"
+    KEY_PERMS=$(docker exec backup stat -c "%a" "$BARMAN_HOME/.ssh/id_rsa" 2>/dev/null || docker exec backup ls -l "$BARMAN_HOME/.ssh/id_rsa" 2>/dev/null | awk '{print $1}')
     if [ "$KEY_PERMS" == "600" ] || echo "$KEY_PERMS" | grep -q "^-rw-------"; then
         echo -e "${GREEN}✓ Private key permissions are correct (600)${NC}"
     else
         echo -e "${YELLOW}⚠ Private key permissions: $KEY_PERMS (expected 600)${NC}"
     fi
 else
-    echo -e "${RED}✗ Barman private SSH key not found${NC}"
+    echo -e "${RED}✗ Backup private SSH key not found${NC}"
 fi
 echo ""
 
-# Test SSH connections from Barman to each Patroni node
+# Test SSH connections from Backup to each Patroni node
 DB_NODES=($(get_db_nodes))
 SUCCESS_COUNT=0
 FAIL_COUNT=0
@@ -50,11 +50,11 @@ for node in "${DB_NODES[@]}"; do
         continue
     fi
     
-    echo -e "${YELLOW}Testing SSH from Barman to ${node}...${NC}"
+    echo -e "${YELLOW}Testing SSH from Backup to ${node}...${NC}"
     
     # Test SSH connection (capture output and exit code separately to avoid set -e issues)
     set +e
-    SSH_OUTPUT=$(docker exec -u barman barman ssh -i "$BARMAN_HOME/.ssh/id_rsa" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o ServerAliveInterval=2 -o ServerAliveCountMax=3 postgres@${node} 'echo SSH_SUCCESS' 2>&1)
+    SSH_OUTPUT=$(docker exec -u backup backup ssh -i "$BARMAN_HOME/.ssh/id_rsa" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o ServerAliveInterval=2 -o ServerAliveCountMax=3 postgres@${node} 'echo SSH_SUCCESS' 2>&1)
     SSH_EXIT_CODE=$?
     set -e
     

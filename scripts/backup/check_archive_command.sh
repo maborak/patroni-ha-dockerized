@@ -64,24 +64,24 @@ else
 fi
 echo ""
 
-# Check Barman backup directory
-echo -e "${YELLOW}Checking Barman backup directory...${NC}"
+# Check Backup backup directory
+echo -e "${YELLOW}Checking Backup backup directory...${NC}"
 BARMAN_DIR="/data/pg-backup/$LEADER/incoming"
 WAL_COUNT=0
-if docker exec barman test -d "$BARMAN_DIR" 2>/dev/null; then
-    WAL_COUNT=$(docker exec barman ls -1 "$BARMAN_DIR" 2>/dev/null | wc -l | tr -d ' ' || echo "0")
+if docker exec backup test -d "$BARMAN_DIR" 2>/dev/null; then
+    WAL_COUNT=$(docker exec backup ls -1 "$BARMAN_DIR" 2>/dev/null | wc -l | tr -d ' ' || echo "0")
     if [ -z "$WAL_COUNT" ]; then
         WAL_COUNT=0
     fi
     if [ "$WAL_COUNT" -gt 0 ]; then
-        echo -e "${GREEN}✓ Barman directory exists with $WAL_COUNT WAL files${NC}"
+        echo -e "${GREEN}✓ Backup directory exists with $WAL_COUNT WAL files${NC}"
         echo -e "${YELLOW}Recent WAL files:${NC}"
-        docker exec barman ls -lht "$BARMAN_DIR" 2>/dev/null | head -5 | sed 's/^/  /'
+        docker exec backup ls -lht "$BARMAN_DIR" 2>/dev/null | head -5 | sed 's/^/  /'
     else
-        echo -e "${YELLOW}⚠ Barman directory exists but is empty${NC}"
+        echo -e "${YELLOW}⚠ Backup directory exists but is empty${NC}"
     fi
 else
-    echo -e "${YELLOW}⚠ Barman directory does not exist: $BARMAN_DIR${NC}"
+    echo -e "${YELLOW}⚠ Backup directory does not exist: $BARMAN_DIR${NC}"
 fi
 echo ""
 
@@ -110,9 +110,9 @@ if [ $? -eq 0 ]; then
         docker exec $LEADER tail -3 /var/log/postgresql/archive.log 2>&1 | sed 's/^/  /' || echo "  (log file may be empty)"
     fi
     
-    # Check if file appeared in Barman
+    # Check if file appeared in Backup
     sleep 1
-    NEW_WAL_COUNT=$(docker exec barman ls -1 "$BARMAN_DIR" 2>/dev/null | wc -l | tr -d ' \n\r' || echo "0")
+    NEW_WAL_COUNT=$(docker exec backup ls -1 "$BARMAN_DIR" 2>/dev/null | wc -l | tr -d ' \n\r' || echo "0")
     if [ -z "$NEW_WAL_COUNT" ]; then
         NEW_WAL_COUNT=0
     fi
@@ -123,9 +123,9 @@ if [ $? -eq 0 ]; then
     NEW_WAL_COUNT=$((NEW_WAL_COUNT + 0))
     WAL_COUNT=$((WAL_COUNT + 0))
     if [ "$NEW_WAL_COUNT" -gt "$WAL_COUNT" ]; then
-        echo -e "${GREEN}✓ New WAL file appeared in Barman directory${NC}"
+        echo -e "${GREEN}✓ New WAL file appeared in Backup directory${NC}"
     else
-        echo -e "${YELLOW}⚠ No new WAL file in Barman directory (count: $WAL_COUNT -> $NEW_WAL_COUNT)${NC}"
+        echo -e "${YELLOW}⚠ No new WAL file in Backup directory (count: $WAL_COUNT -> $NEW_WAL_COUNT)${NC}"
     fi
 else
     echo -e "${RED}✗ WAL switch failed${NC}"

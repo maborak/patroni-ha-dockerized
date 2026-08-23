@@ -32,8 +32,8 @@ ET_VER=$(exec_in etcd1 etcd1 etcd --version | awk '/etcd Version/{print $3; exit
 HA_VER=$(exec_in haproxy haproxy haproxy -v | field 3)
 # PgBouncer ("PgBouncer 1.25.2")
 PB_VER=$(exec_in pgbouncer pgbouncer pgbouncer --version | field 2)
-# Barman ("3.19.1 Barman by EnterpriseDB (...)")
-BA_VER=$(exec_in barman barman barman --version | field 1)
+# Backup ("3.19.1 Backup by EnterpriseDB (...)")
+BA_VER=$(exec_in backup backup backup --version | field 1)
 # pgBadger ("pgBadger version 13.2")
 GB_VER=$(exec_in pgbadger pgbadger pgbadger --version | field 3)
 
@@ -51,6 +51,6 @@ printf "  %-11s %s\n" "Patroni"    "$PA_VER"
 printf "  %-11s %s\n" "etcd"       "$ET_VER"
 printf "  %-11s %s\n" "HAProxy"    "$HA_VER"
 printf "  %-11s %s\n" "PgBouncer"  "$PB_VER"
-printf "  %-11s %s\n" "Barman"     "$BA_VER"
+printf "  %-11s %s\n" "Backup"     "$BA_VER"
 printf "  %-11s %s\n" "pgBadger"   "$GB_VER"
 echo "  Supported/configured: make versions"

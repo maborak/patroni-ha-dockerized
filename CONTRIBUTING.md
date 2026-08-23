@@ -30,7 +30,7 @@ stubbed `docker` binaries — no Docker daemon or running cluster is required.
   (`192.0.2.x`, `198.51.100.x`) or `.env` variable names in examples. Never
   commit `.env`, SSH keys, or generated `configs/` (all gitignored).
 - **Generated files are build artifacts.** `docker-compose.yml`,
-  `configs/*.cfg|*.ini`, and `barman/supervisord.conf` are produced by
+  `configs/*.cfg|*.ini`, and `backup/supervisord.conf` are produced by
   `make generate` from `templates/` — change the templates, not the output.
 
 ## Docs
