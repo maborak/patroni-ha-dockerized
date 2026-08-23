@@ -19,7 +19,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/patroni_smoke.XXXXXX")"
-trap 'rm -rf "$SANDBOX"' EXIT
+FC=''
+trap 'rm -rf "$SANDBOX" "$FC"' EXIT
 
 FAILURES=0
 NEW_CLUSTER=wilmer
@@ -225,6 +226,27 @@ if [ -f "$SHIM_LOG" ]; then
 else
     fail "compose 'up' was never invoked (shim log missing)"
 fi
+
+# ============================================================================
+# 6. Regression — pristine clone (no .env / docker-compose.yml) must reach
+#    the dependency check instead of dying with a bare Error 1
+#    (_find_project_root used to return 1 → set -e aborted before any output)
+# ============================================================================
+echo ""
+echo "── Pristine-clone regression ──"
+FC="$(mktemp -d "${TMPDIR:-/tmp}/patroni_smoke_fresh.XXXXXX")"
+cp -R "$ROOT/scripts" "$FC/scripts"
+set +e
+OUT=$(cd "$FC" && WIZARD_ALLOW_PIPED=1 bash scripts/utils/wizard.sh </dev/null 2>&1)
+FRC=$?
+set -e
+
+echo "$OUT" | grep -q "=== Dependency Check ===" \
+    && pass "pristine clone reaches dependency preflight" \
+    || fail "silent death before preflight (root-detection regression)" "$(echo "$OUT" | head -5)"
+echo "$OUT" | grep -qE "Setup Wizard|dependencies" \
+    && pass "wizard continues past root detection" \
+    || fail "wizard stalled after preflight" "$(echo "$OUT" | tail -5)"
 
 # ============================================================================
 # Summary

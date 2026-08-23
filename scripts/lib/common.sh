@@ -22,17 +22,24 @@ BOLD='\033[1m'
 # ============================================================================
 _find_project_root() {
     local dir="$1"
+    # 1) classic: docker-compose.yml + .env side by side
     while [ "$dir" != "/" ]; do
         [ -f "$dir/docker-compose.yml" ] && [ -f "$dir/.env" ] && echo "$dir" && return 0
         dir="$(dirname "$dir")"
     done
-    # Fallback: try docker-compose.yml only
+    # 2) generated-but-no-.env (fresh checkout right after 'make generate')
     dir="$1"
     while [ "$dir" != "/" ]; do
         [ -f "$dir/docker-compose.yml" ] && echo "$dir" && return 0
         dir="$(dirname "$dir")"
     done
-    return 1
+    # 3) pristine clone: neither marker exists yet. The script sourcing us
+    #    lives at <root>/scripts/lib/common.sh — the repo root is implied,
+    #    so a bare 'make wizard' works BEFORE anything is generated.
+    #    Never return failure here: callers run under set -e and an empty
+    #    PROJECT_ROOT would abort them with a bare "Error 1".
+    echo "${BASH_SOURCE[0]%lib/common.sh}"
+    return 0
 }
 
 # Determine project root from the calling script's location
