@@ -8,7 +8,8 @@ set -eu
 
 RAW=/var/lib/pgbadger/raw
 REPORTS=/var/lib/pgbadger/reports
-mkdir -p "$RAW" "$REPORTS"
+ARCHIVE="$REPORTS/archive"
+mkdir -p "$RAW" "$REPORTS" "$ARCHIVE"
 
 CRON="${PGBADGER_CRON_EXPRESSION:-*/30 * * * *}"
 TZ="${PGBADGER_TZ:-UTC}"
@@ -20,12 +21,18 @@ ${CRON} /usr/local/bin/collect.sh >> /var/lib/pgbadger/cron.log 2>&1
 " > /etc/crontabs/root
 
 # Serve the reports directory (index.html = latest cluster-wide report);
-# plant a placeholder so the healthcheck passes before the first report exists.
+# plant placeholders so the healthcheck passes before the first report exists.
 if [ ! -f "$REPORTS/index.html" ]; then
     cat > "$REPORTS/index.html" <<'HTMLEOF'
 <!DOCTYPE html><html><head><title>pgBadger</title></head>
 <body><h1>pgBadger</h1><p>No reports yet — waiting for the first collection cycle.</p></body></html>
 HTMLEOF
+fi
+if [ ! -f "$REPORTS/list.html" ]; then
+    cat > "$REPORTS/list.html" <<'LISTEOF'
+<!DOCTYPE html><html><head><title>pgBadger — Report History</title></head>
+<body><h1>pgBadger — Report History</h1><p>No reports yet — waiting for the first collection cycle.</p></body></html>
+LISTEOF
 fi
 darkhttpd "$REPORTS" --port 80 &
 

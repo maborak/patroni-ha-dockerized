@@ -15,10 +15,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../lib/common.sh"
+source "$SCRIPT_DIR/../lib/versions.sh"
 
 PROJECT=${COMPOSE_PROJECT_NAME:-patroni-ha-dockerized}
 ENVF="$PROJECT_ROOT/.env"
-TOTAL_STEPS=6
+TOTAL_STEPS=7
 STEP=0
 
 if [ ! -t 0 ] && [ "${WIZARD_ALLOW_PIPED:-0}" != "1" ]; then
@@ -85,6 +86,28 @@ current_leader() {
 running_cluster_name() {
     docker exec db1 patronictl -c /etc/patroni/patroni.yml list 2>/dev/null \
         | grep -oE 'Cluster: [a-zA-Z0-9_-]+' | awk '{print $2}' || true
+}
+
+# Bootstrap-bound versions as actually DEPLOYED (containers' data), falling
+# back to .env, then to the registry default. Used by the versions step so
+# "keep current" means the running stack's versions, not just .env's.
+deployed_pg_version() {
+    local out
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^db1$'; then
+        out=$(docker exec db1 sh -c 'ls /var/lib/postgresql/ 2>/dev/null | grep -E "^[0-9]+$" | sort -n | tail -1' 2>/dev/null || true)
+        [ -n "$out" ] && { echo "$out"; return 0; }
+    fi
+    env_get POSTGRES_VERSION
+}
+
+deployed_etcd_version() {
+    local out
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^etcd1$'; then
+        out=$(docker exec etcd1 etcd --version 2>/dev/null || true)
+        out=$(printf '%s' "$out" | awk '/etcd Version/{print $3; exit}')
+        [ -n "$out" ] && { echo "v${out#v}"; return 0; }
+    fi
+    env_get ETCD_VERSION
 }
 
 wait_healthy() {
@@ -247,6 +270,74 @@ gather_settings() {
         done
     fi
 
+    step "Software versions"
+    # Bootstrap-bound components: changing PostgreSQL or etcd on an existing
+    # stack means destroying every volume and bootstrapping from scratch —
+    # data dirs and DCS state are version-specific (no in-place switching).
+    W_DESTROY_FIRST=0
+    local def_pg def_patroni def_etcd def_haproxy def_pgb def_pgbadger
+    if [ "$IS_FRESH" = "0" ]; then
+        # Ground truth = what the volumes/DCS actually hold
+        def_pg=$(deployed_pg_version);    def_pg=${def_pg:-$(default_version POSTGRES)}
+        def_etcd=$(deployed_etcd_version); def_etcd=${def_etcd:-$(default_version ETCD)}
+    else
+        def_pg=$(env_get POSTGRES_VERSION);   def_pg=${def_pg:-$(default_version POSTGRES)}
+        def_etcd=$(env_get ETCD_VERSION);     def_etcd=${def_etcd:-$(default_version ETCD)}
+    fi
+    def_patroni=$(env_get PATRONI_VERSION);    def_patroni=${def_patroni:-$(default_version PATRONI)}
+    def_haproxy=$(env_get HAPROXY_VERSION);    def_haproxy=${def_haproxy:-$(default_version HAPROXY)}
+    def_pgb=$(env_get PGBOUNCER_VERSION);      def_pgb=${def_pgb:-$(default_version PGBOUNCER)}
+    def_pgbadger=$(env_get PGBADGER_VERSION);  def_pgbadger=${def_pgbadger:-$(default_version PGBADGER)}
+
+    if [ "$IS_FRESH" = "0" ]; then
+        echo "PostgreSQL / etcd: switching versions requires a FULL REBUILD (all volumes"
+        echo "are destroyed, cluster bootstraps fresh). Other components rebuild in place."
+    fi
+
+    local vspec vlabel vvar vcomp vdef
+    for vspec in \
+        "PostgreSQL major:W_POSTGRES_VERSION:POSTGRES:$def_pg" \
+        "Patroni release:W_PATRONI_VERSION:PATRONI:$def_patroni" \
+        "etcd version:W_ETCD_VERSION:ETCD:$def_etcd" \
+        "HAProxy version:W_HAPROXY_VERSION:HAPROXY:$def_haproxy" \
+        "PgBouncer version:W_PGBOUNCER_VERSION:PGBOUNCER:$def_pgb" \
+        "pgBadger version:W_PGBADGER_VERSION:PGBADGER:$def_pgbadger"; do
+        vlabel="${vspec%%:*}";     vspec="${vspec#*:}"
+        vvar="${vspec%%:*}";       vspec="${vspec#*:}"
+        vcomp="${vspec%%:*}";      vdef="${vspec##*:}"
+        while :; do
+            ask "$vlabel (supported: $(supported_versions "$vcomp"))" "$vdef"
+            if canon=$(canonical_version "$vcomp" "$ANSWER"); then
+                eval "$vvar=\$canon"
+                break
+            fi
+            fail_input "$ANSWER — supported ${vcomp} versions: $(supported_versions "$vcomp")"
+        done
+    done
+
+    # Guard: bootstrap-bound version switch on an existing stack ⇒ full rebuild
+    if [ "$IS_FRESH" = "0" ] && { [ "$W_POSTGRES_VERSION" != "$def_pg" ] || [ "$W_ETCD_VERSION" != "$def_etcd" ]; }; then
+        echo ""
+        echo -e "${RED}${BOLD}⚠  VERSION SWITCH REQUIRES DESTROYING ALL DATA${NC}"
+        echo "   PostgreSQL $def_pg → $W_POSTGRES_VERSION / etcd $def_etcd → $W_ETCD_VERSION"
+        echo "   Every volume goes away: ALL databases, Barman backups, pgBadger history."
+        echo "   The cluster is then bootstrapped FRESH on the new versions."
+        echo "   (Tip: 'make dump-db DB=<name>' first if you need a logical copy.)"
+        local answer
+        printf "%bType exactly 'REBUILD' to destroy + rebootstrap, anything else keeps %s / %s:%b " \
+            "${YELLOW}${BOLD}" "$def_pg" "$def_etcd" "${NC}"
+        read -r answer || answer=""
+        if [ "$answer" = "REBUILD" ]; then
+            W_DESTROY_FIRST=1
+            W_ORIG_PG="$def_pg"
+            W_ORIG_ETCD="$def_etcd"
+        else
+            W_POSTGRES_VERSION="$def_pg"
+            W_ETCD_VERSION="$def_etcd"
+            echo -e "${YELLOW}Kept current PostgreSQL/etcd — no rebuild will happen.${NC}"
+        fi
+    fi
+
     step "Review"
     echo "  Cluster name:        $W_CLUSTER"
     echo "  Nodes:               $((W_REPLICAS + 1)) (1 leader + $W_REPLICAS replicas)"
@@ -257,16 +348,23 @@ gather_settings() {
     echo "  HAProxy:             write :${W_WRITE_PORT}  read :${W_READ_PORT}"
     echo "  PgBouncer:           rw :${W_PGBOUNCER_PORT}  ro :${W_PGBOUNCER_RO_PORT}"
     echo "  PostgreSQL nodes:    :${W_BASE_PORT}..$((W_BASE_PORT + W_REPLICAS))"
+    echo "  PostgreSQL:          ${W_POSTGRES_VERSION}  ·  Patroni: ${W_PATRONI_VERSION}  ·  etcd: ${W_ETCD_VERSION}"
+    echo "  HAProxy/PgBouncer:   ${W_HAPROXY_VERSION} / ${W_PGBOUNCER_VERSION}  ·  pgBadger: ${W_PGBADGER_VERSION}"
     echo ""
     echo "  This will:"
     echo "    - Back up .env and write these settings"
     echo "    - Generate SSH keys + configs"
-    echo "    - $([ "$IS_FRESH" = "1" ] && echo "Bootstrap a NEW cluster (leader election, ~1-2 min)" || echo "Restart the existing cluster from its data volumes")"
+    if [ "${W_DESTROY_FIRST:-0}" = "1" ]; then
+        echo -e "    - ${RED}DESTROY all volumes, then bootstrap FRESH on PG $W_POSTGRES_VERSION / etcd $W_ETCD_VERSION${NC}"
+    else
+        echo "    - $([ "$IS_FRESH" = "1" ] && echo "Bootstrap a NEW cluster (leader election, ~1-2 min)" || echo "Restart the existing cluster from its data volumes")"
+    fi
     echo "    - Start 3 etcd, $((W_REPLICAS + 1)) PostgreSQL, HAProxy, 2 PgBouncer, Barman"
 }
 
 apply_settings() {
     title "Applying"
+
     [ -f "$ENVF" ] || cp "$PROJECT_ROOT/.env.example" "$ENVF"
     local ts; ts=$(date +%Y%m%dT%H%M%S)
     cp "$ENVF" "${ENVF}.backup.${ts}"
@@ -286,12 +384,28 @@ apply_settings() {
     env_set PGBOUNCER_PORT "$W_PGBOUNCER_PORT"
     env_set PGBOUNCER_RO_PORT "$W_PGBOUNCER_RO_PORT"
     env_set PATRONI_BASE_PORT "$W_BASE_PORT"
+    env_set POSTGRES_VERSION "$W_POSTGRES_VERSION"
+    env_set PATRONI_VERSION "$W_PATRONI_VERSION"
+    env_set ETCD_VERSION "$W_ETCD_VERSION"
+    env_set HAPROXY_VERSION "$W_HAPROXY_VERSION"
+    env_set PGBOUNCER_VERSION "$W_PGBOUNCER_VERSION"
+    env_set PGBADGER_VERSION "$W_PGBADGER_VERSION"
 
     # Re-sync the shell environment to the new .env. common.sh exported the OLD
     # values at wizard startup; without this, generate_configs.sh treats the
     # stale exported PATRONI_REPLICAS as an override, and docker compose
     # interpolation (shell env wins over .env) bootstraps the old cluster name.
     set -a; source "$ENVF"; set +a
+
+    # Version switch on an existing stack: hand the whole destructive migration
+    # to its dedicated process (preflight → dump → destroy → bootstrap → wait).
+    if [ "${W_DESTROY_FIRST:-0}" = "1" ]; then
+        echo ""
+        echo "Version switch requested — handing off to scripts/ops/rebootstrap.sh ..."
+        exec bash "$PROJECT_ROOT/scripts/ops/rebootstrap.sh" \
+            --from-wizard --yes \
+            --from-pg "$W_ORIG_PG" --from-etcd "$W_ORIG_ETCD"
+    fi
 
     echo "Generating configs..."
     bash "$PROJECT_ROOT/scripts/generate_configs.sh"

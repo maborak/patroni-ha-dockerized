@@ -6,6 +6,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR/.."
 TEMPLATE_DIR="$PROJECT_ROOT/templates"
 
+# Supported-version registry + validators (single source of truth)
+source "$SCRIPT_DIR/lib/versions.sh"
+
 # Ensure SSH keys are present
 bash "$SCRIPT_DIR/utils/setup_ssh_keys.sh"
 
@@ -36,6 +39,92 @@ HAPROXY_STATS_PASSWORD=${HAPROXY_STATS_PASSWORD:-haproxy_stats_secret}
 BARMAN_RETENTION_POLICY=${BARMAN_RETENTION_POLICY:-RECOVERY WINDOW OF 7 DAYS}
 BARMAN_BANDWIDTH_LIMIT=${BARMAN_BANDWIDTH_LIMIT:-50000}
 BARMAN_PARALLEL_JOBS=${BARMAN_PARALLEL_JOBS:-4}
+
+# ----------------------------------------------------------------------------
+# Software versions — step 1: ensure the *_VERSION keys exist in .env.
+# Defaults come from the registry, EXCEPT for the two bootstrap-bound versions
+# (PostgreSQL, etcd): on an existing stack those must match the deployed data
+# — silently bumping them would break the cluster on the next 'make up'.
+# ----------------------------------------------------------------------------
+if [ -f "$PROJECT_ROOT/.env" ]; then
+    # Detect what is actually deployed (empty on fresh hosts)
+    DEPLOYED_PG=""
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^db1$'; then
+        DEPLOYED_PG=$(docker exec db1 sh -c 'ls /var/lib/postgresql/ 2>/dev/null | grep -E "^[0-9]+$" | sort -n | tail -1' 2>/dev/null || true)
+    fi
+    DEPLOYED_ETCD=""
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^etcd1$'; then
+        # capture fully first: piping into head/awk-exit can SIGPIPE the
+        # producer and kill the script under `set -o pipefail`
+        _etcd_version_output=$(docker exec etcd1 etcd --version 2>/dev/null || true)
+        DEPLOYED_ETCD=$(printf '%s' "$_etcd_version_output" | awk '/etcd Version/{print $3; exit}')
+        [ -n "$DEPLOYED_ETCD" ] && DEPLOYED_ETCD="v${DEPLOYED_ETCD#v}"
+    fi
+
+    for comp in POSTGRES PATRONI ETCD HAPROXY PGBOUNCER PGBADGER; do
+        key="${comp}_VERSION"
+        if ! grep -qE "^${key}=" "$PROJECT_ROOT/.env"; then
+            val="$(default_version "$comp")"
+            case "$comp" in
+                POSTGRES) [ -n "$DEPLOYED_PG" ] && val="$DEPLOYED_PG" ;;
+                ETCD)     [ -n "$DEPLOYED_ETCD" ] && val="$DEPLOYED_ETCD" ;;
+            esac
+            {
+                echo ""
+                echo "# Software versions (validated against scripts/lib/versions.sh)"
+                echo "${key}=${val}"
+            } >> "$PROJECT_ROOT/.env"
+            echo "Added missing ${key}=${val} to .env"
+        fi
+    done
+
+    # Re-source .env so values just written are visible below (set -a exports),
+    # preserving any command-line overrides (e.g. PATRONI_REPLICAS from scale).
+    _OVR="${PATRONI_REPLICAS:-}"
+    set -a; source "$PROJECT_ROOT/.env"; set +a
+    [ -n "$_OVR" ] && PATRONI_REPLICAS="$_OVR"
+fi
+
+# ----------------------------------------------------------------------------
+# Software versions — step 2: validate against the supported registry.
+# Unsupported values (even valid upstream tags) abort config generation.
+# ----------------------------------------------------------------------------
+validate_version_or_die POSTGRES   "${POSTGRES_VERSION:-}"
+validate_version_or_die PATRONI    "${PATRONI_VERSION:-}"
+validate_version_or_die ETCD       "${ETCD_VERSION:-}"
+validate_version_or_die HAPROXY    "${HAPROXY_VERSION:-}"
+validate_version_or_die PGBOUNCER  "${PGBOUNCER_VERSION:-}"
+validate_version_or_die PGBADGER   "${PGBADGER_VERSION:-}"
+
+# Normalize any loose spellings in .env ("3.7.1", "1.25.2") to the canonical
+# registry tags ("v3.7.1", "v1.25.2-p0") so file, compose and runtime agree.
+if [ -f "$PROJECT_ROOT/.env" ]; then
+    for comp in POSTGRES PATRONI ETCD HAPROXY PGBOUNCER PGBADGER; do
+        key="${comp}_VERSION"
+        raw=$(grep -E "^${key}=" "$PROJECT_ROOT/.env" | tail -1 | cut -d= -f2-)
+        canon=$(printenv "$key")
+        if [ -n "$raw" ] && [ "$raw" != "$canon" ]; then
+            sed -i.bak -E "s|^${key}=.*|${key}=${canon}|" "$PROJECT_ROOT/.env" \
+                && rm -f "$PROJECT_ROOT/.env.bak"
+            echo "Normalized ${key}: ${raw} -> ${canon}"
+        fi
+    done
+fi
+
+# Warn when the configured PG major differs from the data on existing volumes
+# (PostgreSQL cannot start a data directory created by a different major).
+if [ -n "$DEPLOYED_PG" ] && [ "$DEPLOYED_PG" != "$POSTGRES_VERSION" ]; then
+    echo ""
+    echo "  ⚠️  WARNING: data volumes hold PostgreSQL $DEPLOYED_PG but POSTGRES_VERSION=$POSTGRES_VERSION is configured."
+    echo "     A different major version requires 'make destroy' + fresh bootstrap (ALL DATA LOST),"
+    echo "     or revert POSTGRES_VERSION to $DEPLOYED_PG to keep using the current volumes."
+    echo ""
+fi
+
+# Resolved image references (written literally into the generated compose file)
+ETCD_IMAGE="quay.io/coreos/etcd:${ETCD_VERSION}"
+HAPROXY_IMAGE="haproxy:${HAPROXY_VERSION}"
+PGBOUNCER_IMAGE="edoburu/pgbouncer:${PGBOUNCER_VERSION}"
 
 if [ "$PATRONI_REPLICAS" -lt 1 ]; then
     echo "ERROR: PATRONI_REPLICAS must be >= 1 (got $PATRONI_REPLICAS)"
@@ -91,7 +180,6 @@ content = content.replace('__HAPROXY_STATS_PASSWORD__', """${HAPROXY_STATS_PASSW
 with open('${PROJECT_ROOT}/configs/haproxy.cfg', 'w') as f:
     f.write(content)
 PYEOF
-
 # --- Generate barman.conf ---
 DB_SECTIONS=""
 for i in $(seq 1 $PATRONI_NODES); do
@@ -170,7 +258,7 @@ for i in $(seq 1 $ETCD_COUNT); do
     PEER=$(( i == 1 ? 2380 : i * 10000 + 2380 ))
     BLOCK="  # etcd cluster node ${i}/${ETCD_COUNT}
   etcd${i}:
-    image: quay.io/coreos/etcd:v3.5.17
+    image: ${ETCD_IMAGE}
     container_name: etcd${i}
     hostname: etcd${i}
     ports:
@@ -308,6 +396,12 @@ content = content.replace('__DB_SERVICES__', db_services)
 content = content.replace('__DB_DEPENDS_ON_HEALTHY__', db_depends)
 content = content.replace('__DB_VOLUMES__', db_volumes)
 content = content.replace('__PGBADGER_LOG_VOLUMES__', pgbadger_vols)
+content = content.replace('__HAPROXY_IMAGE__', """${HAPROXY_IMAGE}""")
+content = content.replace('__PGBOUNCER_IMAGE__', """${PGBOUNCER_IMAGE}""")
+content = content.replace('__BA_POSTGRES_VERSION__', """${POSTGRES_VERSION}""")
+content = content.replace('__BA_PATRONI_VERSION__', """${PATRONI_VERSION}""")
+content = content.replace('__BA_ALPINE_VERSION__', """${ALPINE_VERSION:-3.22}""")
+content = content.replace('__BA_PGBADGER_VERSION__', """${PGBADGER_VERSION}""")
 with open('${PROJECT_ROOT}/docker-compose.yml', 'w') as f:
     f.write(content)
 PYEOF

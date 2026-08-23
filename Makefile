@@ -1,4 +1,4 @@
-.PHONY: help generate setup-keys up wizard down restart logs ps build destroy status shell-db1 shell-db2 shell-db3 shell-db4 shell-etcd1 shell-haproxy shell-barman shell show-backups check smoke-test backup dump-db restore-db list-backups check-archive pitr monitor-recovery vacuum analyze pgbadger psql psql-read psql-node list-dbs stats activity slow-queries switchover reinit failover switchover-to-remote switchover-from-remote test-ssh test-connectivity info config leader disk
+.PHONY: help generate setup-keys up wizard down restart rebootstrap logs ps build destroy status shell-db1 shell-db2 shell-db3 shell-db4 shell-etcd1 shell-haproxy shell-barman shell show-backups check smoke-test backup dump-db restore-db list-backups check-archive pitr monitor-recovery vacuum analyze pgbadger psql psql-read psql-node list-dbs stats activity slow-queries switchover reinit failover scale switchover-to-remote switchover-from-remote test-ssh test-connectivity info config leader disk versions
 
 .DEFAULT_GOAL := help
 
@@ -83,14 +83,17 @@ destroy: ## ⚠️ Destroy stack AND ALL DATA: containers, volumes (DB data, etc
 check: ## Run comprehensive health check (scripts/checks/check_stack.sh)
 	@bash scripts/checks/check_stack.sh
 
-smoke-test: ## Run end-to-end smoke tests (setup wizard + PITR wizard; sandboxed, no Docker needed)
+smoke-test: ## Run end-to-end smoke tests (wizard + PITR + scale + versions; sandboxed, no Docker needed)
 	@bash scripts/testing/smoke_test_wizard.sh
 	@bash scripts/testing/smoke_test_pitr.sh
+	@bash scripts/testing/smoke_test_scale.sh
+	@bash scripts/testing/smoke_test_versions.sh
 
 status: ## Show cluster status, health, and all access endpoints (HAProxy, PgBouncer, nodes, Barman)
 	@. ./.env 2>/dev/null; \
 	LEADER=$$(docker exec db1 patronictl -c /etc/patroni/patroni.yml list 2>/dev/null | grep Leader | awk '{print $$2}'); \
 	PGUSER=$${POSTGRES_USER:-postgres}; \
+	PGPASS=$${POSTGRES_PASSWORD:-}; \
 	PGDB=$${DEFAULT_DATABASE:-maborak}; \
 	echo "=== Patroni Cluster Status ==="; \
 	docker exec db1 patronictl -c /etc/patroni/patroni.yml list 2>/dev/null || echo "Patroni not ready yet"; \
@@ -98,16 +101,18 @@ status: ## Show cluster status, health, and all access endpoints (HAProxy, PgBou
 	echo "=== etcd Cluster Health ==="; \
 	docker exec etcd1 etcdctl endpoint health 2>/dev/null || echo "etcd not ready yet"; \
 	echo ""; \
+	bash scripts/utils/running_versions.sh; \
+	echo ""; \
 	echo "=== Connection Endpoints (local cluster) ==="; \
-	echo "  Write (HAProxy):    postgresql://$$PGUSER@localhost:$${HAPROXY_WRITE_PORT:-5551}/$$PGDB   [make psql]"; \
-	echo "  Read  (HAProxy):    postgresql://$$PGUSER@localhost:$${HAPROXY_READ_PORT:-5552}/$$PGDB   [make psql-read]"; \
-	echo "  Write (PgBouncer):  postgresql://$$PGUSER@localhost:$${PGBOUNCER_PORT:-6432}/$$PGDB"; \
-	echo "  Read  (PgBouncer):  postgresql://$$PGUSER@localhost:$${PGBOUNCER_RO_PORT:-6433}/$$PGDB"; \
+	echo "  Write (HAProxy):    postgresql://$$PGUSER:$$PGPASS@localhost:$${HAPROXY_WRITE_PORT:-5551}/$$PGDB   [make psql]"; \
+	echo "  Read  (HAProxy):    postgresql://$$PGUSER:$$PGPASS@localhost:$${HAPROXY_READ_PORT:-5552}/$$PGDB   [make psql-read]"; \
+	echo "  Write (PgBouncer):  postgresql://$$PGUSER:$$PGPASS@localhost:$${PGBOUNCER_PORT:-6432}/$$PGDB"; \
+	echo "  Read  (PgBouncer):  postgresql://$$PGUSER:$$PGPASS@localhost:$${PGBOUNCER_RO_PORT:-6433}/$$PGDB"; \
 	if [ -n "$${REMOTE_HAPROXY_HOST:-}" ]; then \
 		echo ""; \
 		echo "  Remote standby cluster:"; \
-		echo "  Write (HAProxy):    postgresql://$$PGUSER@$${REMOTE_HAPROXY_HOST}:$${REMOTE_HAPROXY_WRITE_PORT:-5511}/$$PGDB"; \
-		echo "  Read  (HAProxy):    postgresql://$$PGUSER@$${REMOTE_HAPROXY_HOST}:$${REMOTE_HAPROXY_READ_PORT:-5521}/$$PGDB"; \
+		echo "  Write (HAProxy):    postgresql://$$PGUSER:$$PGPASS@$${REMOTE_HAPROXY_HOST}:$${REMOTE_HAPROXY_WRITE_PORT:-5511}/$$PGDB"; \
+		echo "  Read  (HAProxy):    postgresql://$$PGUSER:$$PGPASS@$${REMOTE_HAPROXY_HOST}:$${REMOTE_HAPROXY_READ_PORT:-5521}/$$PGDB"; \
 	fi; \
 	echo ""; \
 	echo "  Direct node access (bypasses HAProxy — no failover protection):"; \
@@ -119,7 +124,7 @@ status: ## Show cluster status, health, and all access endpoints (HAProxy, PgBou
 		api=$${api:-$$(( $${PATRONI_API_BASE_PORT:-8001} + i - 1 ))}; \
 		ROLE="replica"; \
 		[ "db$$i" = "$$LEADER" ] && ROLE="LEADER"; \
-		printf "  db%-2s   postgresql://%s@localhost:%s/%s   (Patroni API :%s)   [%s]\n" "$$i" "$$PGUSER" "$$port" "$$PGDB" "$$api" "$$ROLE"; \
+		printf "  db%-2s   postgresql://%s:%s@localhost:%s/%s   (Patroni API :%s)   [%s]\n" "$$i" "$$PGUSER" "$$PGPASS" "$$port" "$$PGDB" "$$api" "$$ROLE"; \
 		i=$$((i + 1)); \
 	done; \
 	echo ""; \
@@ -133,7 +138,43 @@ status: ## Show cluster status, health, and all access endpoints (HAProxy, PgBou
 	else \
 		echo "  Leader unknown — list manually: make list-backups [SERVER=dbN]"; \
 	fi; \
-	echo "  Manage: make backup | make list-backups | make show-backups SERVER=dbN BACKUP_ID=<id>"
+	echo "  Manage: make backup | make list-backups | make show-backups SERVER=dbN BACKUP_ID=<id>"; \
+	echo ""; \
+	echo "=== pgBadger Log Analytics ==="; \
+	if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^pgbadger$$'; then \
+		HEALTH=$$(docker inspect --format '{{.State.Health.Status}}' pgbadger 2>/dev/null || echo unknown); \
+		echo "  Container: running ($$HEALTH)"; \
+		echo "  Web UI:    http://localhost:$${PGBADGER_PORT:-8080}/   [make pgbadger to run a cycle now]"; \
+		echo "  Schedule:  '$${PGBADGER_CRON_EXPRESSION:-*/30 * * * *}' (safety window $${PGBADGER_SAFETY_MINUTES:-10}m, retention $${PGBADGER_RETENTION_DAYS:-7}d)"; \
+		docker exec pgbadger sh -c '\
+			R=/var/lib/pgbadger/reports/index.html; \
+			A=/var/lib/pgbadger/reports/archive; \
+			if [ -f "$$R" ] && [ "$$(wc -c < "$$R")" -gt 1024 ]; then \
+				echo "  Report:    ready — generated $$(date -u -r "$$R" "+%Y-%m-%d %H:%M:%S UTC")"; \
+			else \
+				echo "  Report:    none yet — finished node logs are pulled once they age past the safety window"; \
+			fi; \
+			if [ -d "$$A" ]; then \
+				AC=$$(find "$$A" -type f -name "report_*.html" 2>/dev/null | wc -l); \
+				echo "  History:   $$AC archived report(s) — browse http://localhost:$${PGBADGER_PORT:-8080}/list.html"; \
+			fi; \
+			N=$$(find /var/lib/pgbadger/raw -type f -name "*.json" 2>/dev/null | wc -l); \
+			SZ=$$(du -sh /var/lib/pgbadger/raw 2>/dev/null | cut -f1); \
+			PENDING=""; \
+			for d in /logs/db*; do \
+				[ -d "$$d" ] || continue; \
+				C=$$(find "$$d" -maxdepth 1 -type f -name "*.json" 2>/dev/null | wc -l); \
+				PENDING="$$PENDING $${d#/logs/}:$$C"; \
+			done; \
+			echo "  Raw pool:  $$N file(s) ready for parsing ($$SZ)"; \
+			echo "  On nodes (not yet pulled):$$PENDING"; \
+		' 2>/dev/null || echo "  (pgbadger container not responding to exec)"; \
+		LAST=$$(docker exec pgbadger sh -c 'grep -E "report regenerated|no log files collected|ERROR|WARN:" /var/lib/pgbadger/last_cycle.log 2>/dev/null | tail -1'); \
+		if [ -z "$$LAST" ]; then LAST=$$(docker logs --tail 100 pgbadger 2>&1 | grep -E 'report regenerated|no log files collected|ERROR|WARN:' | tail -1); fi; \
+		if [ -n "$$LAST" ]; then echo "  Last cycle: $$LAST"; fi; \
+	else \
+		echo "  Container not running — start the stack with: make up"; \
+	fi
 
 info: ## Show detailed stack information (JSON or human-readable)
 	@if [ "$(FORMAT)" = "json" ]; then \
@@ -329,8 +370,9 @@ analyze: ## Run ANALYZE only (usage: make analyze NODE=db1, or make analyze ALL=
 		$(if $(NODE),--node $(NODE),) \
 		$(if $(filter 1,$(ALL)),--all-nodes,)
 
-pgbadger: ## Regenerate pgBadger report (usage: make pgbadger)
-	@docker exec pgbadger /usr/local/bin/collect.sh || echo "pgBadger container not running or report generation failed"
+pgbadger: ## Regenerate pgBadger report + archive it (usage: make pgbadger)
+	@docker exec pgbadger sh -c 'tee /var/lib/pgbadger/last_cycle.log </dev/null >/dev/null; /usr/local/bin/collect.sh 2>&1 | tee -a /var/lib/pgbadger/last_cycle.log' \
+		|| echo "pgBadger container not running or report generation failed"
 
 # ============================================================================
 # Database Operations
@@ -436,6 +478,24 @@ failover: ## Force failover (emergency only, usage: make failover NEW_LEADER=db2
 	@echo "Failover complete. New status:"
 	@docker exec db1 patronictl -c /etc/patroni/patroni.yml list
 
+rebootstrap: ## ⚠ Destroy + fresh bootstrap on new versions (usage: make rebootstrap POSTGRES_VERSION=18 ETCD_VERSION=3.7.1 [DUMP_DB=name] [YES=1] [DRY_RUN=1]; ALL DATA LOST)
+	@FLAGS=""; \
+	[ -n "$(POSTGRES_VERSION)" ] && FLAGS="$$FLAGS --postgres $(POSTGRES_VERSION)"; \
+	[ -n "$(ETCD_VERSION)" ]     && FLAGS="$$FLAGS --etcd $(ETCD_VERSION)"; \
+	[ -n "$(DUMP_DB)" ]          && FLAGS="$$FLAGS --dump-db $(DUMP_DB)"; \
+	[ "$(YES)" = "1" ]           && FLAGS="$$FLAGS --yes"; \
+	[ "$(DRY_RUN)" = "1" ]       && FLAGS="$$FLAGS --dry-run"; \
+	bash scripts/ops/rebootstrap.sh $$FLAGS
+
+scale: ## Scale cluster replicas (usage: make scale REPLICAS=5 [YES=1] [DRY_RUN=1] [SKIP_WAIT=1] [TIMEOUT=900]; shrink deletes removed nodes' data)
+	@FLAGS=""; \
+	[ -n "$(REPLICAS)" ]     && FLAGS="$$FLAGS --replicas $(REPLICAS)"; \
+	[ "$(YES)" = "1" ]       && FLAGS="$$FLAGS --yes"; \
+	[ "$(DRY_RUN)" = "1" ]   && FLAGS="$$FLAGS --dry-run"; \
+	[ "$(SKIP_WAIT)" = "1" ] && FLAGS="$$FLAGS --skip-wait"; \
+	[ -n "$(TIMEOUT)" ]      && FLAGS="$$FLAGS --timeout $(TIMEOUT)"; \
+	bash scripts/ops/scale_cluster.sh $$FLAGS
+
 # ============================================================================
 # Cross-cluster switchover (Mac ↔ Remote standby cluster)
 # See docs/switchover.md for the full procedure.
@@ -503,6 +563,9 @@ shell: ## Open shell in specified node (usage: make shell NODE=db1)
 # ============================================================================
 # Configuration
 # ============================================================================
+
+versions: ## Show configured vs supported software versions (registry: scripts/lib/versions.sh)
+	@bash scripts/utils/show_versions.sh
 
 config: ## Show current configuration (ports, environment variables)
 	@echo "=== Environment Variables ==="

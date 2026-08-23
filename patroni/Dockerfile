@@ -1,4 +1,7 @@
-FROM postgres:15
+# PostgreSQL major version — passed as a build arg from docker-compose
+# (validated against scripts/lib/versions.sh at config-generation time)
+ARG POSTGRES_VERSION=18
+FROM postgres:${POSTGRES_VERSION}
 
 # Install dependencies
 RUN apt-get update && apt-get install -y \
@@ -17,8 +20,9 @@ RUN apt-get update && apt-get install -y \
 # Install setuptools first (required for some dependencies)
 RUN pip3 install --break-system-packages --no-cache-dir setuptools
 
-# Install Patroni with etcd3 support
-RUN pip3 install --break-system-packages --no-cache-dir patroni[etcd3] psycopg2-binary
+# Install Patroni (exact release, from the supported-version registry) with etcd3 support
+ARG PATRONI_VERSION=4.1.5
+RUN pip3 install --break-system-packages --no-cache-dir "patroni[etcd3]==${PATRONI_VERSION}" psycopg2-binary
 
 # Create directories and set permissions
 RUN mkdir -p /etc/patroni /home/postgres/.ssh /etc/supervisor/conf.d /var/run/sshd /var/log/postgresql && \
@@ -39,7 +43,8 @@ RUN ssh-keygen -A && \
 COPY entrypoint.sh /entrypoint.sh
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY create_databases.sh /etc/patroni/create_databases.sh
-RUN chmod +x /entrypoint.sh /etc/patroni/create_databases.sh
+COPY archive-wal.sh /usr/local/bin/archive-wal.sh
+RUN chmod +x /entrypoint.sh /etc/patroni/create_databases.sh /usr/local/bin/archive-wal.sh
 
 # Set working directory
 WORKDIR /var/lib/postgresql

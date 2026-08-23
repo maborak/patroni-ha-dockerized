@@ -1,4 +1,7 @@
-FROM postgres:15
+# Same PostgreSQL major as the DB nodes — keeps pg_dump/psql client versions
+# compatible for streaming and restores (passed as a build arg from compose).
+ARG POSTGRES_VERSION=18
+FROM postgres:${POSTGRES_VERSION}
 
 # Install Barman, PostgreSQL client, supervisor, and pgBadger
 RUN apt-get update && apt-get install -y \

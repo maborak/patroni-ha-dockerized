@@ -340,6 +340,69 @@ If reinit fails: check logs (`docker logs db2 --tail 50`), check disk
 
 ---
 
+## Runbook: Scaling the Cluster
+
+**Goal**: grow or shrink the number of PostgreSQL nodes with automated
+health gating (`make scale`, powered by `scripts/ops/scale_cluster.sh`).
+
+**Preconditions:**
+
+- ✅ Stack is running and healthy (`make check`)
+- ✅ For shrink: you accept permanent loss of the removed nodes' data,
+  volumes, and Barman backups for those servers
+- ✅ Sufficient disk space when growing (each new node clones the dataset)
+
+### Grow (add replicas)
+
+**1. Preview:** `make scale REPLICAS=5 DRY_RUN=1` — prints the plan without
+touching anything.
+
+**2. Apply:** `make scale REPLICAS=5` — regenerates configs, appends port
+entries to `.env`, starts the new nodes, rebuilds the Barman image so its
+backup loop covers them, then waits until every member reports
+`running`/`streaming` (timeout `TIMEOUT=900` by default; new nodes clone the
+leader via basebackup, which takes longer on large datasets).
+
+**3. Verify:** `make status` shows N+1 members with exactly one leader;
+`make check` is green.
+
+### Shrink (remove replicas)
+
+Shrink always removes the **highest-numbered** nodes (`db1..dbN` stay
+contiguous). If the current leader is among them, the script performs a
+planned switchover to a surviving replica first and aborts without deleting
+anything if the promotion doesn't complete.
+
+**1. Preview:** `make scale REPLICAS=2 DRY_RUN=1`
+
+**2. Apply:** `make scale REPLICAS=2` — type `SCALE` to confirm (or `YES=1`
+for unattended runs). After `compose up --remove-orphans` prunes the orphaned
+containers, the script deletes their `_data`/`_logs` volumes and the matching
+Barman server data.
+
+**3. Verify:** `make status`; confirm HAProxy/PgBouncer still serve reads and
+writes (`make psql`, `make psql-read`).
+
+### Rollback
+
+- **Grow**: `make scale REPLICAS=<old> YES=1` removes what was added.
+- **Shrink**: deleted volumes are gone — restore from Barman backups of a
+  surviving server by rejoining the node as a fresh replica
+  (`PATRONI_REPLICAS=<old> make up`), or PITR if needed.
+
+### Red Flags / Do Not Do This
+
+❌ **Do not shrink during heavy write load or an in-progress PITR/backup.**
+
+❌ **Do not edit `PATRONI_REPLICAS` in `.env` manually while the cluster runs** —
+use `make scale`, which also cleans up ports, volumes, and Barman state.
+(Manual edit + `make up` still works for grow, but skips volume/Barman hygiene.)
+
+❌ **Do not shrink below 2 members** for anything beyond throwaway experiments —
+a single-node cluster has no failover protection.
+
+---
+
 ## Runbook: Cluster Health Check
 
 **Goal**: comprehensive health verification of the entire stack.

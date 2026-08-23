@@ -1,7 +1,7 @@
 # Patroni HA Dockerized
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15--18-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org)
 [![Patroni](https://img.shields.io/badge/HA-Patroni-orange)](https://github.com/patroni/patroni)
 [![Barman](https://img.shields.io/badge/Backup-Barman-blue)](https://pgbarman.org)
 [![etcd](https://img.shields.io/badge/DCS-etcd_3.5-419eda)](https://etcd.io)
@@ -90,7 +90,7 @@ make up             # generate configs + start
 ### Verify the cluster
 
 ```bash
-make status         # Patroni + etcd health, endpoints, backups
+make status         # Patroni + etcd health, running versions, endpoints, backups, pgBadger analytics
 make check          # comprehensive health check (replication, WAL, pooling, split-brain…)
 make psql           # write via HAProxy → psql on the leader
 make psql-read      # read via HAProxy → psql on a replica
@@ -155,7 +155,8 @@ Everything lives in **`.env`** (copy from `.env.example`). Key variables:
 | `PATRONI_CLUSTER_NAME` | `patroni1` | DCS scope + data-dir name. Changing requires destroy + re-bootstrap |
 | `PATRONI_REPLICAS` | `3` | Replicas; leader is additional (total = N+1, hostnames `db1..dbN`) |
 | `ETCD_COUNT` | `3` | Must be odd; changing requires destroy + re-bootstrap |
-| `POSTGRES_VERSION` | `15` | Drives data dir & bin dir paths |
+| `POSTGRES_VERSION` | `18` | Supported: 15–18. Changing on an existing cluster requires destroy + re-bootstrap |
+| `PATRONI_VERSION` / `ETCD_VERSION` / `HAPROXY_VERSION` / `PGBOUNCER_VERSION` / `PGBADGER_VERSION` | latest tested | Validated against `scripts/lib/versions.sh` (`make versions`); unsupported values abort `make generate` |
 | `POSTGRES_PASSWORD` / `REPLICATOR_USER` / `REPLICATOR_PASSWORD` | — | **Set before first use** |
 | `DEFAULT_DATABASE` | `maborak` | Created on bootstrap |
 | `HAPROXY_*_PORT`, `PGBOUNCER_*_PORT`, `BARMAN_PORT` | see above | Host port mappings |
@@ -167,13 +168,14 @@ Everything lives in **`.env`** (copy from `.env.example`). Key variables:
 | `PGBADGER_SAFETY_MINUTES` | `10` | Only pull log files untouched for ≥ N minutes |
 | `REMOTE_*`, `MAC_VPN_HOST` | placeholders | Cross-cluster DR section — see [docs/switchover.md](docs/switchover.md) |
 
-Scaling is an `.env` edit away:
+Scaling is one command:
 
 ```bash
-# grow from 4 to 6 nodes
-sed -i.bak 's/^PATRONI_REPLICAS=.*/PATRONI_REPLICAS=5/' .env
-make up        # new nodes join as replicas and sync automatically
+make scale REPLICAS=5            # grow to 6 members; new nodes join as replicas
+make scale REPLICAS=2 DRY_RUN=1  # preview any resize before touching the stack
 ```
+
+Grow regenerates configs, starts the new nodes (they sync from the leader via basebackup) and waits until every member is `running`/`streaming`. Shrink removes the highest-numbered nodes — it switches the leader over first if needed, then (after typed confirmation) deletes their containers, data/log volumes and Barman backups. See [docs/runbooks.md](docs/runbooks.md#runbook-scaling-the-cluster).
 
 ## Everyday operations
 
@@ -185,6 +187,8 @@ make up        # new nodes join as replicas and sync automatically
 | PSQL sessions | `make psql` / `make psql-read` / `make psql-node NODE=db3` |
 | Planned switchover | `make switchover NEW_LEADER=db2` |
 | Emergency failover | `make failover NEW_LEADER=db3` |
+| Scale replicas up / down | `make scale REPLICAS=5 [DRY_RUN=1] [YES=1]` |
+| Switch PG/etcd versions | `make wizard` (type `REBUILD`) or `make rebootstrap POSTGRES_VERSION=18 ETCD_VERSION=3.7.1 [DUMP_DB=name]` — destroys all volumes |
 | Rebuild a replica | `make reinit NODE=db2` |
 | Logs / shells | `make logs` / `make shell NODE=db1` |
 | Disk usage | `make disk` |
@@ -326,9 +330,11 @@ More: [docs/runbooks.md](docs/runbooks.md#troubleshooting) · [docs/checks.md](d
 
 **Why 3 etcd nodes?** Quorum of 2 tolerates one failure — the smallest size that gives any fault tolerance. `ETCD_COUNT` is configurable but must stay odd.
 
-**Can I change the node count later?** Yes — edit `PATRONI_REPLICAS` and `make up`; new nodes join as replicas. Shrinking deletes the removed nodes' data.
+**Can I change the node count later?** Yes — `make scale REPLICAS=N`; new nodes join as replicas. Shrinking deletes the removed nodes' data (with confirmation and automatic leader switchover if needed).
 
 **Can I rename the cluster / change etcd size / change PG major version?** Only with `make destroy` and a fresh bootstrap — these are baked into the DCS state and data directories.
+
+**Which software versions are supported?** Run `make versions` — it shows configured vs supported for PostgreSQL (15–18), Patroni, etcd, HAProxy, PgBouncer and pgBadger. The registry lives in `scripts/lib/versions.sh`; anything not listed is rejected at `make generate`, even if an upstream tag exists. Defaults track the latest tested releases; the wizard asks for all six with validation.
 
 **Mac / Windows?** Developed on macOS; works anywhere Docker + Compose v2 runs. `remote-standby/` includes an Arch Linux guide for the DR side.
 

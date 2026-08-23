@@ -3,11 +3,16 @@ services:
   __ETCD_SERVICES__
 
   # Patroni/PostgreSQL cluster
-  # Base template for Patroni nodes
-  patroni_base: &patroni_base
+  # Base template for Patroni nodes. The x- prefix marks this as a compose
+  # EXTENSION field, not a service — otherwise compose creates (and tries to
+  # healthcheck) a useless "patroni_base" container on every up.
+  x-patroni_base: &patroni_base
     build:
       context: ./patroni
       dockerfile: Dockerfile
+      args:
+        POSTGRES_VERSION: "__BA_POSTGRES_VERSION__"
+        PATRONI_VERSION: "__BA_PATRONI_VERSION__"
     # Note: Must run as root for supervisor, but Patroni runs as postgres user via supervisor
     environment:
       - DEFAULT_DATABASE=${DEFAULT_DATABASE:-maborak}
@@ -51,6 +56,8 @@ __DB_SERVICES__
     build:
       context: ./barman
       dockerfile: Dockerfile
+      args:
+        POSTGRES_VERSION: "__BA_POSTGRES_VERSION__"
     container_name: barman
     hostname: barman
     environment:
@@ -80,7 +87,7 @@ __DB_DEPENDS_ON_HEALTHY__
 
   # HAProxy load balancer
   haproxy:
-    image: haproxy:2.8
+    image: __HAPROXY_IMAGE__
     container_name: haproxy
     hostname: haproxy
     ports:
@@ -103,7 +110,7 @@ __DB_DEPENDS_ON_HEALTHY__
 
   # PgBouncer
   pgbouncer:
-    image: edoburu/pgbouncer:latest
+    image: __PGBOUNCER_IMAGE__
     container_name: pgbouncer
     ports:
       - "${PGBOUNCER_PORT:-6432}:6432"
@@ -128,7 +135,7 @@ __DB_DEPENDS_ON_HEALTHY__
 
   # PgBouncer Read-Only (Port 6433 -> HAProxy 5432)
   pgbouncer-ro:
-    image: edoburu/pgbouncer:latest
+    image: __PGBOUNCER_IMAGE__
     container_name: pgbouncer-ro
     ports:
       - "${PGBOUNCER_RO_PORT:-6433}:6432"
@@ -157,6 +164,9 @@ __DB_DEPENDS_ON_HEALTHY__
     build:
       context: ./pgbadger
       dockerfile: Dockerfile
+      args:
+        ALPINE_VERSION: "__BA_ALPINE_VERSION__"
+        PGBADGER_VERSION: "__BA_PGBADGER_VERSION__"
     container_name: pgbadger
     hostname: pgbadger
     environment:

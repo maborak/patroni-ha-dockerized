@@ -8,11 +8,13 @@ Operational tooling for the Patroni HA + Barman stack, organized by purpose.
 scripts/
 ├── generate_configs.sh        # Render configs/ from templates (.env values)
 ├── lib/
-│   └── common.sh              # Shared lib: colors, .env loading, node discovery, leader detection
+│   ├── common.sh              # Shared lib: colors, .env loading, node discovery, leader detection
+│   └── versions.sh            # Supported-version registry + validators (powers make versions)
 ├── ops/                       # Lifecycle & HA operations
 │   ├── check_replica.sh       # HAProxy health check (replica endpoint)
 │   ├── lib/
 │   │   └── cross_cluster.sh   # Shared helpers for cross-cluster switchover
+│   ├── scale_cluster.sh       # Powers `make scale` (grow/shrink members)
 │   ├── switchover_to_remote.sh
 │   └── switchover_from_remote.sh
 ├── backup/                    # Barman / backup tasks
@@ -36,6 +38,8 @@ scripts/
 │   └── vacuum_optimize.sh
 ├── utils/                     # Helpers
 │   ├── setup_ssh_keys.sh
+│   ├── show_versions.sh       # Powers `make versions` (configured vs supported)
+│   ├── running_versions.sh    # Versions block of `make status` (probed from containers)
 │   ├── test_ssh_to_barman.sh
 │   ├── test_barman_ssh_to_patroni.sh
 │   ├── test_barman_postgres_connectivity.sh
@@ -43,6 +47,8 @@ scripts/
 └── testing/                   # Testing & stress testing
     ├── smoke_test_wizard.sh   # Powers `make smoke-test`
     ├── smoke_test_pitr.sh     # Powers `make smoke-test`
+    ├── smoke_test_scale.sh    # Powers `make smoke-test`
+    ├── smoke_test_versions.sh # Powers `make smoke-test`
     ├── smoke_test_import.sh   # Powers `make smoke-test`
     ├── stress_test_db.sh
     ├── stress_test_db.py
@@ -203,13 +209,21 @@ Cross-cluster switchover, local → remote standby cluster (forward direction). 
 
 Cross-cluster switchover, remote → local (reverse direction). Same flags as above. See `docs/switchover.md`.
 
+#### `scale_cluster.sh` — `make scale`
+
+Grow or shrink the cluster to N replicas (+1 leader). Grow: regenerates configs, joins new nodes as replicas, rebuilds the Barman image (its backup loop is baked in), waits until all members are running/streaming. Shrink: switches the leader over first if it would be removed, then — after typed confirmation (`SCALE`) or `YES=1` — deletes removed nodes' containers, data/log volumes and Barman server data. Also supports `DRY_RUN=1`, `SKIP_WAIT=1`, `TIMEOUT=<secs>`. See the "Scaling the Cluster" runbook in `docs/runbooks.md`.
+
+#### `rebootstrap.sh` — `make rebootstrap`
+
+Dedicated version-switch process: destroy every volume and bootstrap fresh on new PostgreSQL/etcd majors (in-place switching is impossible — data dirs and DCS state are version-specific). Phases: preflight (registry-validated targets, deployed-version probe) → optional `--dump-db` logical dumps → typed confirmation → `down -v` → `.env` rewrite → generate + `up --build` → wait-for-health. The setup wizard delegates to it when you switch bootstrap-bound versions (type `REBUILD`).
+
 ---
 
 ### Testing
 
-#### `smoke_test_wizard.sh` / `smoke_test_pitr.sh` — `make smoke-test`
+#### `smoke_test_wizard.sh` / `smoke_test_pitr.sh` / `smoke_test_scale.sh` — `make smoke-test`
 
-End-to-end smoke tests for the setup wizard and the PITR wizard, using sandboxed docker stubs — no Docker or running stack needed.
+End-to-end smoke tests for the setup wizard, the PITR wizard, and cluster scaling, using sandboxed docker stubs — no Docker or running stack needed.
 
 #### `stress_test_db.sh` / `stress_test_db.py`
 
@@ -233,6 +247,7 @@ bash scripts/testing/cleanup_stress_test.sh
 ### Referenced from outside `scripts/`
 
 - `patroni/create_databases.sh` — creates the default database during Patroni bootstrap. Not called directly; built into the Patroni image at `/etc/patroni/create_databases.sh` and wired via `post_bootstrap` in `configs/patroni*.yml`. Database name comes from `DEFAULT_DATABASE`.
+- `patroni/archive-wal.sh` — WAL archiving delegate baked into the Patroni image (`/usr/local/bin/archive-wal.sh`); `archive_command` in `templates/patroni.yml.tpl` calls it as `%p %f`. Exists because PG18 rejects literal `%` placeholders in `archive_command` (date formats are impossible inline) and because strict failure semantics + dedicated logging belong in a script, not a YAML one-liner. Ships each node's WAL to `barman:/data/pg-backup/<node>/incoming/` and self-heals the remote directory.
 
 ---
 

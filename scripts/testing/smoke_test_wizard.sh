@@ -40,6 +40,8 @@ printf 'services: {}\n' > "$SANDBOX/docker-compose.yml"
 
 # Seed .env with the OLD values (the pre-change state that triggered the bug).
 # Real passwords are kept so the wizard takes the "(unchanged)" password path.
+# Version keys are stripped so the wizard's versions step starts from registry
+# defaults (the developer's machine may carry older values like PG 15).
 if [ ! -f "$ROOT/.env" ]; then
     echo "No $ROOT/.env found — copy .env.example first." >&2
     exit 1
@@ -47,7 +49,7 @@ fi
 sed -E \
     -e "s|^PATRONI_CLUSTER_NAME=.*|PATRONI_CLUSTER_NAME=patroni1|" \
     -e "s|^PATRONI_REPLICAS=.*|PATRONI_REPLICAS=2|" \
-    "$ROOT/.env" > "$SANDBOX/.env"
+    "$ROOT/.env" | grep -vE '^(POSTGRES|PATRONI|ETCD|HAPROXY|PGBOUNCER|PGBADGER)_VERSION=' > "$SANDBOX/.env"
 
 # --- Stub: docker-compose (records the env it sees on 'up') -------------
 SHIM_LOG="$SANDBOX/compose_env.log"
@@ -103,10 +105,11 @@ chmod +x "$SANDBOX/bin/docker" "$SANDBOX/bin/docker-compose"
 echo ""
 echo "Running wizard in sandbox (cluster: patroni1->$NEW_CLUSTER, replicas: 2->$NEW_REPLICAS)..."
 WIZARD_LOG="$SANDBOX/wizard_output.log"
-# Answers: cluster name, replica count, admin user (default), database
-# (default), default ports (y), apply (y). Passwords are auto-skipped.
+# Answers: cluster name, replica count, then defaults for: admin user,
+# default database, ports (y), software versions ×6, apply (y).
+# Passwords are auto-skipped because .env carries real ones.
 set +e
-printf '%s\n%s\n\n\n\n\n\n\n' "$NEW_CLUSTER" "$NEW_REPLICAS" \
+printf '%s\n%s\n\n\n\n\n\n\n\n\n\n\n\n' "$NEW_CLUSTER" "$NEW_REPLICAS" \
     | WIZARD_ALLOW_PIPED=1 PATH="$SANDBOX/bin:$PATH" \
       bash "$SANDBOX/scripts/utils/wizard.sh" > "$WIZARD_LOG" 2>&1
 WIZARD_RC=$?
@@ -140,6 +143,16 @@ grep -q "^PATRONI_DB5_PORT=15435$" "$SANDBOX/.env" \
 grep -q "^PATRONI_DB5_API_PORT=8005$" "$SANDBOX/.env" \
     && pass ".env has PATRONI_DB5_API_PORT=8005" \
     || fail ".env missing PATRONI_DB5_API_PORT=8005"
+
+# ============================================================================
+# 3b. Assertions — software versions step wrote registry defaults
+# ============================================================================
+for kv in "POSTGRES_VERSION=18" "PATRONI_VERSION=4.1.5" "ETCD_VERSION=v3.7.1" \
+          "HAPROXY_VERSION=3.4" "PGBOUNCER_VERSION=v1.25.2-p0" "PGBADGER_VERSION=13.2"; do
+    grep -q "^${kv}$" "$SANDBOX/.env" \
+        && pass ".env has ${kv}" \
+        || fail ".env missing/incorrect ${kv}"
+done
 
 # ============================================================================
 # 4. Assertions — generated configs reflect 5 nodes
