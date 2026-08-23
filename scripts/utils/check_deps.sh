@@ -108,7 +108,8 @@ fi
 # --- Daemon sanity for selected engine ---------------------------------------
 if [ -n "$SELECTED" ]; then
     if "$SELECTED" info >/dev/null 2>&1; then
-        ok "${SELECTED} daemon reachable ($("$SELECTED" info --format '{{.ServerVersion}}' 2>/dev/null))"
+        ENG_VER=$("$SELECTED" info --format '{{.ServerVersion}}' 2>/dev/null | head -1)
+        ok "${SELECTED} daemon reachable${ENG_VER:+ ($ENG_VER)}"
     else
         bad "${SELECTED} daemon NOT reachable — is the service running?"
         [ "$SELECTED" = "docker" ] \
@@ -120,7 +121,7 @@ fi
 COMPOSE=""
 if [ -n "$SELECTED" ]; then
     if "$SELECTED" compose version >/dev/null 2>&1; then
-        COMPOSE="$SELECTED compose ($("$SELECTED" compose version 2>/dev/null | awk '{print $NF}'))"
+        COMPOSE="$SELECTED compose ($("$SELECTED" compose version 2>/dev/null | head -1 | awk '{print $NF}'))"
     elif [ "$SELECTED" = "docker" ] && have docker-compose && docker-compose version >/dev/null 2>&1; then
         COMPOSE="docker-compose ($(docker-compose version 2>/dev/null | awk '{print $NF}'))"
     elif [ "$SELECTED" = "podman" ] && have podman-compose && podman-compose --version >/dev/null 2>&1; then

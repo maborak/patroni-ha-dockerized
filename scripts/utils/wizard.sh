@@ -73,7 +73,7 @@ gen_password() { openssl rand -hex 12; }
 ENGINE_LIST=$(bash "$SCRIPT_DIR/../utils/check_deps.sh" engines 2>/dev/null || true)
 has_engine() { echo " $ENGINE_LIST " | grep -q " $1 "; }
 
-if ! grep -qE '^CONTAINER_ENGINE=' "$ENVF" 2>/dev/null; then
+if [ ! -f "$ENVF" ] || ! grep -qE '^CONTAINER_ENGINE=' "$ENVF" 2>/dev/null; then
     if has_engine docker && has_engine podman; then
         title "Container engine"
         echo "Both docker and podman are available on this host."

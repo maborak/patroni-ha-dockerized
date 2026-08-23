@@ -12,6 +12,9 @@ source "$SCRIPT_DIR/lib/versions.sh"
 # Ensure SSH keys are present
 bash "$SCRIPT_DIR/utils/setup_ssh_keys.sh"
 
+# Generated-artifact dirs must exist on pristine clones (they are gitignored)
+mkdir -p "$PROJECT_ROOT/configs"
+
 # Save any overrides passed via environment before sourcing .env
 _OVERRIDE_REPLICAS="${PATRONI_REPLICAS:-}"
 
