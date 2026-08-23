@@ -59,7 +59,7 @@ A production-grade, single-command **PostgreSQL High-Availability lab and toolbo
 
 ## Quickstart
 
-Requirements: Docker (with Compose v2), `make`, `openssl`, `python3`.
+Requirements: Docker (with Compose v2) or Podman, `make`, `openssl`, `python3`. Run `make doctor` first on a new host — it verifies everything and explains exactly what's missing. When both docker and podman are installed, the setup wizard asks which to use (persisted as `CONTAINER_ENGINE` in `.env`); podman-only hosts need the `podman-docker` shim.
 
 ### Interactive wizard (recommended)
 

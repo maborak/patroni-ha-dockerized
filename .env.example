@@ -31,6 +31,11 @@ PGBOUNCER_VERSION=v1.25.2-p0
 # pgBadger release installed from upstream in pgbadger/Dockerfile.
 PGBADGER_VERSION=13.2
 
+# Container engine driving the stack: docker (default) or podman.
+# Both installed -> the setup wizard asks; set here to skip the prompt.
+# podman-only hosts need a docker-compatible CLI (e.g. the podman-docker shim).
+CONTAINER_ENGINE=docker
+
 # ============================================================================
 # 2. CREDENTIALS & AUTHENTICATION
 # ============================================================================

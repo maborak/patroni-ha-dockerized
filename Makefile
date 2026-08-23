@@ -1,4 +1,4 @@
-.PHONY: help generate setup-keys up wizard down restart rebootstrap logs ps build destroy status shell-db1 shell-db2 shell-db3 shell-db4 shell-etcd1 shell-haproxy shell-barman shell show-backups check smoke-test backup dump-db restore-db list-backups check-archive pitr monitor-recovery vacuum analyze pgbadger psql psql-read psql-node list-dbs stats activity slow-queries switchover reinit failover scale switchover-to-remote switchover-from-remote test-ssh test-connectivity info config leader disk versions
+.PHONY: help doctor generate setup-keys up wizard down restart rebootstrap logs ps build destroy status shell-db1 shell-db2 shell-db3 shell-db4 shell-etcd1 shell-haproxy shell-barman shell show-backups check smoke-test backup dump-db restore-db list-backups check-archive pitr monitor-recovery vacuum analyze pgbadger psql psql-read psql-node list-dbs stats activity slow-queries switchover reinit failover scale switchover-to-remote switchover-from-remote test-ssh test-connectivity info config leader disk versions
 
 .DEFAULT_GOAL := help
 
@@ -83,11 +83,12 @@ destroy: ## ⚠️ Destroy stack AND ALL DATA: containers, volumes (DB data, etc
 check: ## Run comprehensive health check (scripts/checks/check_stack.sh)
 	@bash scripts/checks/check_stack.sh
 
-smoke-test: ## Run end-to-end smoke tests (wizard + PITR + scale + versions; sandboxed, no Docker needed)
+smoke-test: ## Run end-to-end smoke tests (wizard + PITR + scale + versions + deps; sandboxed, no Docker needed)
 	@bash scripts/testing/smoke_test_wizard.sh
 	@bash scripts/testing/smoke_test_pitr.sh
 	@bash scripts/testing/smoke_test_scale.sh
 	@bash scripts/testing/smoke_test_versions.sh
+	@bash scripts/testing/smoke_test_deps.sh
 
 status: ## Show cluster status, health, and all access endpoints (HAProxy, PgBouncer, nodes, Barman)
 	@. ./.env 2>/dev/null; \
@@ -563,6 +564,9 @@ shell: ## Open shell in specified node (usage: make shell NODE=db1)
 # ============================================================================
 # Configuration
 # ============================================================================
+
+doctor: ## Dependency preflight: verify docker/compose/openssl/python3 before using the stack
+	@bash scripts/utils/check_deps.sh
 
 versions: ## Show configured vs supported software versions (registry: scripts/lib/versions.sh)
 	@bash scripts/utils/show_versions.sh

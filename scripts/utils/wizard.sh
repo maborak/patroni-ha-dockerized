@@ -68,6 +68,33 @@ env_set() {
 gen_password() { openssl rand -hex 12; }
 
 # ============================================================================
+# Container engine selection (docker vs podman) + dependency preflight
+# ============================================================================
+ENGINE_LIST=$(bash "$SCRIPT_DIR/../utils/check_deps.sh" engines 2>/dev/null || true)
+has_engine() { echo " $ENGINE_LIST " | grep -q " $1 "; }
+
+if has_engine docker && has_engine podman \
+        && ! grep -qE '^CONTAINER_ENGINE=' "$ENVF" 2>/dev/null; then
+    title "Container engine"
+    echo "Both docker and podman are available on this host."
+    while :; do
+        ask "Engine to drive the stack with (stored in .env as CONTAINER_ENGINE)" "docker"
+        case "$ANSWER" in
+            docker|podman) env_set CONTAINER_ENGINE "$ANSWER"; break ;;
+            *) fail_input "$ANSWER (docker or podman)" ;;
+        esac
+    done
+fi
+
+# Dependency preflight BEFORE anything else: a fresh host without a usable
+# engine used to die here with a bare "command not found / Error 1".
+if ! bash "$SCRIPT_DIR/../utils/check_deps.sh"; then
+    echo "" >&2
+    echo -e "${YELLOW}Wizard aborted — fix the dependencies above first ('make doctor' to re-check).${NC}" >&2
+    exit 1
+fi
+
+# ============================================================================
 # State helpers
 # ============================================================================
 stack_state() {

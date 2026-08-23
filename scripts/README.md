@@ -38,6 +38,7 @@ scripts/
 │   └── vacuum_optimize.sh
 ├── utils/                     # Helpers
 │   ├── setup_ssh_keys.sh
+│   ├── check_deps.sh          # Dependency preflight (`make doctor`, wizard step 1; docker/podman aware)
 │   ├── show_versions.sh       # Powers `make versions` (configured vs supported)
 │   ├── running_versions.sh    # Versions block of `make status` (probed from containers)
 │   ├── test_ssh_to_barman.sh
