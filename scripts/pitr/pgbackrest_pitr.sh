@@ -149,8 +149,16 @@ case " ${NODES[*]} " in *" $TARGET_NODE "*) ;; *) die "$TARGET_NODE is not a run
 # ── Target spec ──
 TARGET_ARGS=(--set="$BACKUP_ID" "--target-action=$TARGET_ACTION")
 case "$TARGET_TYPE" in
-    time)      [ -n "$TARGET_TIME" ] || { read -rp "Target time ('YYYY-MM-DD HH:MM:SS', UTC): " TARGET_TIME; }
-               [ -n "$TARGET_TIME" ] || die "target time required"
+    time)      while [ -z "${TARGET_TIME:-}" ]; do
+                   read -rp "Target time ('YYYY-MM-DD HH:MM:SS' UTC, empty=abort): " TARGET_TIME || TARGET_TIME=""
+                   if [ -z "$TARGET_TIME" ]; then
+                       die "No target time given — aborted (or pass --target-time 'YYYY-MM-DD HH:MM:SS')"
+                   fi
+                   if ! printf '%s' "$TARGET_TIME" | grep -qE "^[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}(:[0-9]{2})?$"; then
+                       warn "Not a timestamp: '$TARGET_TIME' (example: 2026-08-24 15:30:00)"
+                       TARGET_TIME=""
+                   fi
+               done
                TARGET_ARGS+=(--type=time "--target=$TARGET_TIME");;
     xid)       [ -n "$TARGET_XID" ] || die "--target-xid required"
                TARGET_ARGS+=(--type=xid "--xid=$TARGET_XID");;
