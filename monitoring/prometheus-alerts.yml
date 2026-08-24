@@ -1,0 +1,51 @@
+groups:
+  - name: patroni-ha
+    rules:
+      - alert: NoClusterLeader
+        expr: count(patroni_primary == 1) == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: "No Patroni leader elected for >1m"
+
+      - alert: NodeDown
+        expr: up{job=~"patroni|postgres-exporters"} == 0
+        for: 2m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.job }} target {{ $labels.instance }} down"
+
+      - alert: ReplicationLagHigh
+        expr: (max(patroni_xlog_location) - on(instance) patroni_xlog_replay_location) > 67108864
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.instance }} replication lag > 64MB"
+
+      - alert: WALArchiveFailing
+        expr: increase(pg_stat_archiver_failed_count[10m]) > 0
+        for: 0m
+        labels: {severity: critical}
+        annotations:
+          summary: "WAL archive failures on {{ $labels.instance }} — backups/PITR at risk"
+
+      - alert: WALArchiveStale
+        expr: pg_stat_archiver_since_last_archived_seconds > 600
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "No WAL archived in >10min on {{ $labels.instance }}"
+
+      - alert: PostgresRestarted
+        expr: pg_process_uptime_seconds < 300
+        for: 0m
+        labels: {severity: info}
+        annotations:
+          summary: "PostgreSQL restarted on {{ $labels.instance }}"
+
+      - alert: TooManyConnections
+        expr: pg_activity_connections / pg_activity_max_connections > 0.85
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: ">85% of max_connections used on {{ $labels.instance }}"

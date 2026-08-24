@@ -428,6 +428,30 @@ ${LOG_VOL_ENTRY}"
     fi
 done
 
+# ── Render configs/prometheus.yml when monitoring is on ──
+if [ "${ENABLE_MONITORING:-0}" = "1" ]; then
+    PTARGETS=""
+    ETARGETS=""
+    for i in $(seq 1 $PATRONI_NODES); do
+        PTARGETS="${PTARGETS}      - targets: [\"db${i}:8001\"]
+        labels:
+          node: db${i}
+"
+        ETARGETS="${ETARGETS}        - \"postgres-exporter-db${i}:9187\"
+"
+    done
+    export PTARGETS ETARGETS
+    python3 << PYRENDER
+import os
+with open(os.environ['TEMPLATE_DIR'] + '/prometheus.yml.tpl') as f:
+    c = f.read()
+c = c.replace('__PATRONI_TARGETS__', os.environ['PTARGETS'].rstrip())
+c = c.replace('__POSTGRES_EXPORTER_TARGETS__', os.environ['ETARGETS'].rstrip())
+with open(os.environ['PROJECT_ROOT'] + '/configs/prometheus.yml', 'w') as f:
+    f.write(c)
+PYRENDER
+fi
+
 # Write intermediate files for python to read (avoids shell quoting issues)
 NODE_BACKUP_CONF_MOUNT=""
 [ "$BACKUP_TOOL" = "pgbackrest" ] && NODE_BACKUP_CONF_MOUNT='      - ./configs/pgbackrest-node.conf:/etc/pgbackrest/pgbackrest.conf:ro'
@@ -438,6 +462,76 @@ printf '%s' "$PGBADGER_LOG_VOLUMES" > /tmp/_gen_pgbadger_vols.txt
 printf '%s' "$ETCD_SERVICES" > /tmp/_gen_etcd_services.txt
 printf '%s' "$ETCD_DEPENDS" > /tmp/_gen_etcd_depends.txt
 printf '%s' "$ETCD_VOLUMES" > /tmp/_gen_etcd_volumes.txt
+
+# ── Monitoring stack (opt-in via ENABLE_MONITORING=1) ──
+MONITORING_SERVICES=""
+PROMETHEUS_TARGETS=""
+EXPORTER_TARGETS=""
+if [ "${ENABLE_MONITORING:-0}" = "1" ]; then
+    {
+      echo '  # ── Monitoring stack (generated when ENABLE_MONITORING=1) ──'
+      cat << 'MONSVCS'
+  prometheus:
+    image: docker.io/prom/prometheus:v2.53.0
+    container_name: prometheus
+    volumes:
+      - ./configs/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus-alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    networks: [patroni_network]
+    restart: unless-stopped
+
+  grafana:
+    image: docker.io/grafana/grafana:11.1.0
+    container_name: grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    networks: [patroni_network]
+    restart: unless-stopped
+
+  alertmanager:
+    image: docker.io/prom/alertmanager:v0.27.0
+    container_name: alertmanager
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "${ALERTMANAGER_PORT:-9093}:9093"
+    networks: [patroni_network]
+    restart: unless-stopped
+
+  haproxy-exporter:
+    image: docker.io/prom/haproxy-exporter:v0.13.0
+    container_name: haproxy-exporter
+    command: --haproxy.scrape-uri=http://${HAPROXY_STATS_USER:-admin}:${HAPROXY_STATS_PASSWORD:-haproxy_stats_secret}@haproxy:8404/stats;csv
+    networks: [patroni_network]
+    restart: unless-stopped
+MONSVCS
+      for i in $(seq 1 $PATRONI_NODES); do
+        echo "  postgres-exporter-db${i}:"
+        echo "    image: docker.io/prometheuscommunity/postgres-exporter:v0.15.0"
+        echo "    container_name: postgres-exporter-db${i}"
+        echo "    environment:"
+        echo "      DATA_SOURCE_NAME: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db${i}:5431/${DEFAULT_DATABASE}?sslmode=disable"
+        echo "      PG_EXPORTER_EXTEND_QUERY_PATH: /queries.yml"
+        echo "    volumes:"
+        echo "      - ./monitoring/postgres-exporter-queries.yml:/queries.yml:ro"
+        echo "    networks: [patroni_network]"
+        echo "    restart: unless-stopped"
+        echo ""
+      done
+    } > /tmp/_gen_mon_services.txt
+else
+    : > /tmp/_gen_mon_services.txt
+fi
 
 python3 << PYEOF
 with open('${TEMPLATE_DIR}/docker-compose.yml.tpl', 'r') as f:
@@ -456,6 +550,8 @@ with open('/tmp/_gen_etcd_depends.txt', 'r') as f:
     etcd_depends = f.read()
 with open('/tmp/_gen_etcd_volumes.txt', 'r') as f:
     etcd_volumes = f.read()
+with open('/tmp/_gen_mon_services.txt', 'r') as f:
+    mon_services = f.read()
 content = content.replace('__ETCD_SERVICES__', etcd_services)
 content = content.replace('__ETCD_DEPENDS__', etcd_depends)
 content = content.replace('__ETCD_VOLUMES__', etcd_volumes)
@@ -463,6 +559,9 @@ content = content.replace('__DB_SERVICES__', db_services)
 content = content.replace('__DB_DEPENDS_ON_HEALTHY__', db_depends)
 content = content.replace('__DB_VOLUMES__', db_volumes)
 content = content.replace('__PGBADGER_LOG_VOLUMES__', pgbadger_vols)
+content = content.replace('__MONITORING_SERVICES__', mon_services)
+content = content.replace('__MONITORING_VOLUMES__', """  prometheus_data:
+  grafana_data:""" if mon_services.strip() else "")
 content = content.replace('__HAPROXY_IMAGE__', """${HAPROXY_IMAGE}""")
 content = content.replace('__PGBOUNCER_IMAGE__', """${PGBOUNCER_IMAGE}""")
 content = content.replace('__BA_POSTGRES_VERSION__', """${POSTGRES_VERSION}""")

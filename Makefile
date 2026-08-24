@@ -7,7 +7,7 @@ ifeq ($(wildcard bin/docker),)
 $(shell bash scripts/utils/setup_engine_shims.sh >/dev/null 2>&1 || true)
 endif
 
-.PHONY: help doctor generate setup-keys up wizard down restart rebootstrap logs ps build destroy status shell-db1 shell-db2 shell-db3 shell-db4 shell-etcd1 shell-haproxy shell-backup shell show-backups check smoke-test backup dump-db restore-db list-backups check-archive pitr monitor-recovery vacuum analyze pgbadger psql psql-read psql-node list-dbs stats activity slow-queries switchover reinit failover scale switchover-to-remote switchover-from-remote test-ssh test-connectivity info config leader disk versions
+.PHONY: help doctor generate setup-keys up wizard down restart rebootstrap logs ps build destroy status shell-db1 shell-db2 shell-db3 shell-db4 shell-etcd1 shell-haproxy shell-backup shell show-backups check smoke-test backup dump-db restore-db list-backups check-archive pitr monitor-recovery vacuum analyze pgbadger psql psql-read psql-node list-dbs stats activity slow-queries switchover reinit failover scale switchover-to-remote switchover-from-remote test-ssh test-connectivity info config leader disk versions verify-backup monitoring-up monitoring-down monitoring-status
 
 .DEFAULT_GOAL := help
 
@@ -28,7 +28,8 @@ help: ## Show this help message
 	@echo "  make show-backups SERVER=db1 BACKUP_ID=20260123T120000"
 	@echo "  make pitr BACKUP_ID=20260123T120000 TARGET_TIME='2026-01-23 12:30:00' SERVER=db1 TARGET=db2"
 	@echo "  make vacuum ALL=1"
-	@echo "  make psql"
+	@echo "  make verify-backup DEEP=1"
+	@echo "  make monitoring-up"
 	@echo "  make leader"
 
 # ============================================================================
@@ -219,6 +220,22 @@ disk: ## Disk usage / cleanup (FORMAT=json | CLEANUP=logs|dumps|docker|snapshots
 # ============================================================================
 # Backup Operations
 # ============================================================================
+
+verify-backup: ## Prove a backup restores: ephemeral container + sanity checks (SERVER=db1 BACKUP_ID=latest DEEP=1)
+	@bash scripts/backup/verify_backup.sh SERVER=$(if $(SERVER),$(SERVER),db1) BACKUP_ID=$(if $(BACKUP_ID),$(BACKUP_ID),latest) $(if $(filter 1,$(DEEP)),--deep,)
+
+monitoring-up: ## Start Prometheus/Grafana/Alertmanager (requires ENABLE_MONITORING=1 in .env; run make generate after enabling)
+	@grep -qE '^ENABLE_MONITORING=1' .env || { echo "Set ENABLE_MONITORING=1 in .env, then run make generate"; exit 1; }
+	docker-compose up -d prometheus grafana alertmanager haproxy-exporter postgres-exporter-db1 postgres-exporter-db2 postgres-exporter-db3
+	@echo ""
+	@echo "Grafana:    http://localhost:$$(grep -E '^GRAFANA_PORT=' .env | cut -d= -f2) (admin / GRAFANA_ADMIN_PASSWORD)"
+	@echo "Prometheus: http://localhost:$$(grep -E '^PROMETHEUS_PORT=' .env | cut -d= -f2)/targets"
+
+monitoring-down: ## Stop the monitoring stack
+	docker-compose --profile monitoring stop
+
+monitoring-status: ## Show monitoring container status + Prometheus target health
+	@podman ps -a --format '{{.Names}}\t{{.Status}}' | grep -E 'prometheus|grafana|alertmanager|exporter' || echo "monitoring stack not created"
 
 backup: ## Create backup (auto-detects leader, or use SERVER=db1 to override)
 	@echo "=== Step 1: Patroni Cluster Status ==="

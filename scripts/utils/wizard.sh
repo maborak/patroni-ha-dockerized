@@ -442,6 +442,13 @@ apply_settings() {
     env_set PGBOUNCER_VERSION "$W_PGBOUNCER_VERSION"
     env_set PGBADGER_VERSION "$W_PGBADGER_VERSION"
 
+    if ask_yes "Enable monitoring stack (Prometheus + Grafana + alerts)?"; then
+        env_set ENABLE_MONITORING 1
+        [ "$(env_get GRAFANA_ADMIN_PASSWORD)" = "CHANGE_ME_BEFORE_FIRST_USE" ] || [ -z "$(env_get GRAFANA_ADMIN_PASSWORD)" ] &&             env_set GRAFANA_ADMIN_PASSWORD "$(gen_password)" && W_GRAF_PASS_SET=1
+    else
+        env_set ENABLE_MONITORING 0
+    fi
+
     # Re-sync the shell environment to the new .env. common.sh exported the OLD
     # values at wizard startup; without this, generate_configs.sh treats the
     # stale exported PATRONI_REPLICAS as an override, and docker compose

@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  shell-lint:
+    name: bash -n + shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash syntax check (all scripts)
+        run: |
+          find scripts bin -type f -name '*.sh' -print0 | while IFS= read -r -d '' f; do
+            bash -n "$f" || exit 1
+          done
+      - name: shellcheck (advisory)
+        continue-on-error: true
+        run: |
+          shellcheck --severity=warning $(find scripts bin -type f -name '*.sh')
+
+  render-templates:
+    name: generator renders valid configs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: sudo apt-get update && sudo apt-get install -y python3-yaml
+      - name: Prepare dummy .env
+        run: |
+          cp .env.example .env
+          # deterministic values for rendering
+          sed -i 's/=${POSTGRES_PASSWORD:-}/=dummy-pass/' .env || true
+      - name: Run generate_configs.sh
+        run: bash scripts/generate_configs.sh
+      - name: Validate rendered artifacts
+        run: |
+          python3 - << 'EOF'
+          import yaml, sys, os
+          def load(p):
+              with open(p) as f: return yaml.safe_load(f)
+          c = load("docker-compose.yml")
+          assert "services" in c and c["services"], "no services in compose"
+          required = ["db1", "db2", "db3", "etcd1", "haproxy", "backup"]
+          missing = [s for s in required if s not in c["services"]]
+          assert not missing, f"missing services: {missing}"
+          for f in ["configs/haproxy.cfg", "configs/pgbouncer.ini",
+                    "configs/pgbackrest.conf", "configs/pgbackrest-node.conf",
+                    "configs/pgbackrest-repo.conf"]:
+              assert os.path.exists(f), f"generated file missing: {f}"
+          print("render OK:", len(c["services"]), "services")
+          EOF
+      - name: Placeholder coverage guard
+        run: |
+          # Every __VAR__ placeholder in templates must be substituted somewhere
+          # (generate_configs.sh or an entrypoint). Catches the class of bug
+          # where a template grows a new placeholder but no renderer learns it.
+          python3 - << 'EOF'
+          import re, glob, sys
+          handlers = ""
+          for f in ["scripts/generate_configs.sh", "patroni/entrypoint.sh",
+                    "backup/entrypoint.sh"]:
+              handlers += open(f).read()
+          missing = []
+          for tpl in glob.glob("templates/*.tpl"):
+              for var in set(re.findall(r"__[A-Z0-9_]+__", open(tpl).read())):
+                  if var not in handlers:
+                      missing.append(f"{tpl}: {var}")
+          if missing:
+              print("UNHANDLED PLACEHOLDERS:\n" + "\n".join(missing))
+              sys.exit(1)
+          print("all placeholders handled")
+          EOF
+
+  smoke-test:
+    name: make smoke-test (sandboxed)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make smoke-test

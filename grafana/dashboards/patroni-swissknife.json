@@ -1,0 +1,227 @@
+{
+  "uid": "patroni-swissknife",
+  "title": "PostgreSQL HA — Swiss Knife",
+  "description": "Patroni topology, replication lag, WAL archiving, connection & query health for the patroni-ha-dockerized stack.",
+  "tags": ["patroni", "postgresql", "ha"],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-3h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "db",
+        "label": "Database",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prom" },
+        "query": "label_values(pg_database_size_bytes, datname)",
+        "refresh": 1,
+        "includeAll": false,
+        "current": { "text": "maborak", "value": "maborak" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Nodes up",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [{ "expr": "count(up{job=\"patroni\"} == 1)", "instant": true }],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "green", "value": 3 }
+          ]}
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Leader present",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [{ "expr": "count(patroni_primary == 1) or vector(0)", "instant": true }],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "1": { "text": "YES", "color": "green" }, "0": { "text": "NO LEADER", "color": "red" } } }
+          ]
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "WAL archive staleness (s)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [{ "expr": "max(pg_stat_archiver_since_last_archived_seconds)", "instant": true }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 300 },
+            { "color": "red", "value": 600 }
+          ]}
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Connections / max",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [{ "expr": "max(pg_activity_connections) / max(pg_activity_max_connections)", "instant": true, "legendFormat": "{{instance}}" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "max": 1,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "orange", "value": 0.7 },
+            { "color": "red", "value": 0.85 }
+          ]}
+        }
+      }
+    },
+    {
+      "id": 5,
+      "title": "DB size ($db)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [{ "expr": "pg_database_size_bytes{datname=\"$db\"}", "instant": true, "legendFormat": "{{instance}}" }],
+      "fieldConfig": { "defaults": { "unit": "bytes" } }
+    },
+    {
+      "id": 6,
+      "title": "PostgreSQL uptime",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [{ "expr": "min(pg_process_uptime_seconds)", "instant": true }],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "id": 10,
+      "title": "Cluster topology (Patroni)",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [
+        { "expr": "patroni_postgres_running * on(instance) group_left patroni_primary", "instant": true, "format": "table", "legendFormat": "" },
+        { "expr": "patroni_xlog_replayed_location + 0 * patroni_postgres_running", "instant": true, "format": "table" },
+        { "expr": "patroni_timeline", "instant": true, "format": "table" }
+      ],
+      "transformations": [
+        { "id": "organize", "options": { "excludeByName": { "Time": true, "__name__": true, "job": true }, "renameByName": { "Value #A": "running(leader=1)", "instance": "node" } } }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Replication lag (bytes)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [{
+        "expr": "max(patroni_xlog_location) - on(instance) (patroni_xlog_replayed_location + 0 * patroni_xlog_location)",
+        "legendFormat": "{{instance}}"
+      }],
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "fillOpacity": 15 } } }
+    },
+    {
+      "id": 12,
+      "title": "Replay delay (seconds)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [{ "expr": "pg_replication_replay_lag_seconds > 0", "legendFormat": "{{instance}}" }],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "fillOpacity": 15 } } }
+    },
+    {
+      "id": 20,
+      "title": "Transactions per second ($db)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [
+        { "expr": "sum by (instance) (rate(pg_stat_database_xact_commit{datname=\"$db\"}[1m]))", "legendFormat": "commit {{instance}}" },
+        { "expr": "sum by (instance) (rate(pg_stat_database_xact_rollback{datname=\"$db\"}[1m]))", "legendFormat": "rollback {{instance}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "id": 21,
+      "title": "Cache hit ratio ($db)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [{
+        "expr": "sum by (instance) (rate(pg_stat_database_blks_hit{datname=\"$db\"}[5m]) / (rate(pg_stat_database_blks_hit{datname=\"$db\"}[5m]) + rate(pg_stat_database_blks_read{datname=\"$db\"}[5m])) > 0)",
+        "legendFormat": "{{instance}}"
+      }],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0.9, "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "id": 22,
+      "title": "WAL archiver — archived vs failed",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [
+        { "expr": "sum by (instance) (rate(pg_stat_archiver_archived_count[5m]))", "legendFormat": "archived {{instance}}" },
+        { "expr": "sum by (instance) (rate(pg_stat_archiver_failed_count[5m]))", "legendFormat": "failed {{instance}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+    {
+      "id": 30,
+      "title": "Temporary file bytes",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [{ "expr": "rate(pg_stat_database_temp_bytes{datname=\"$db\"}[5m])", "legendFormat": "{{instance}}" }],
+      "fieldConfig": { "defaults": { "unit": "Bps" } }
+    },
+    {
+      "id": 31,
+      "title": "Deadlocks & conflicts",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [
+        { "expr": "increase(pg_stat_database_deadlocks{datname=\"$db\"}[1h])", "legendFormat": "deadlocks {{instance}}" },
+        { "expr": "increase(pg_stat_database_conflicts{datname=\"$db\"}[1h])", "legendFormat": "conflicts {{instance}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "id": 32,
+      "title": "Checkpoints (timed vs requested)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [
+        { "expr": "rate(pg_checkpoints_timed[5m])", "legendFormat": "timed {{instance}}" },
+        { "expr": "rate(pg_checkpoints_requested[5m])", "legendFormat": "requested {{instance}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+    {
+      "id": 33,
+      "title": "HAProxy sessions by frontend",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "targets": [{ "expr": "sum by (frontend) (rate(haproxy_frontend_sessions_total[1m]))", "legendFormat": "{{frontend}}" }],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    }
+  ]
+}

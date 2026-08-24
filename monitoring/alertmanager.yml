@@ -1,0 +1,17 @@
+route:
+  receiver: default
+  group_by: [alertname, instance]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: default
+    # Wire your own channel here, e.g.:
+    # webhook_configs:
+    #   - url: http://hooks.example.com/...
+    # slack_configs:
+    #   - api_url: https://hooks.slack.com/services/...
+    webhook_configs:
+      - url: http://127.0.0.1:1/  # null sink — replace me
+        send_resolved: true

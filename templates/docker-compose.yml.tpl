@@ -194,6 +194,7 @@ __PGBADGER_LOG_VOLUMES__
       start_period: 15s
     restart: unless-stopped
 
+__MONITORING_SERVICES__
 networks:
   patroni_network:
     driver: bridge
@@ -207,5 +208,6 @@ __DB_VOLUMES__
   backup_data:
   backup_repo:
   backup_pgbackrest_repo:
+__MONITORING_VOLUMES__
   pgbadger_raw:
   pgbadger_reports:

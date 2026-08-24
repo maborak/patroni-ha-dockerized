@@ -1,0 +1,73 @@
+# Custom queries for postgres_exporter (mounted via PG_EXPORTER_EXTEND_QUERY_PATH)
+pg_replication:
+  query: |
+    SELECT
+      CASE WHEN pg_is_in_recovery()
+           THEN COALESCE(EXTRACT(EPOCH FROM now() - pg_last_xact_replay_timestamp()), 0)::float
+           ELSE 0 END AS replay_lag_seconds,
+      CASE WHEN pg_is_in_recovery() THEN 1 ELSE 0 END AS in_recovery
+  metrics:
+    - replay_lag_seconds:
+        usage: "GAUGE"
+        description: "Seconds behind primary (0 on primary)"
+    - in_recovery:
+        usage: "GAUGE"
+        description: "1 if the node is in recovery"
+
+pg_archiver:
+  query: |
+    SELECT archived_count::bigint AS archived_count,
+           failed_count::bigint AS failed_count,
+           COALESCE(EXTRACT(EPOCH FROM now() - last_archived_time), 0)::float AS since_last_archived_seconds
+    FROM pg_stat_archiver
+  metrics:
+    - archived_count:
+        usage: "COUNTER"
+        description: "WAL segments archived"
+    - failed_count:
+        usage: "COUNTER"
+        description: "WAL archive failures"
+    - since_last_archived_seconds:
+        usage: "GAUGE"
+        description: "Seconds since last successful WAL archive"
+
+pg_activity:
+  query: |
+    SELECT
+      (SELECT count(*) FROM pg_stat_activity) AS connections,
+      (SELECT count(*) FROM pg_stat_activity WHERE state = 'active') AS active,
+      (SELECT setting::float FROM pg_settings WHERE name = 'max_connections') AS max_connections,
+      (SELECT COALESCE(EXTRACT(EPOCH FROM now() - pg_postmaster_start_time()), 0)::float) AS process_uptime_seconds
+  metrics:
+    - connections:
+        usage: "GAUGE"
+    - active:
+        usage: "GAUGE"
+    - max_connections:
+        usage: "GAUGE"
+    - process_uptime_seconds:
+        usage: "GAUGE"
+        description: "PostgreSQL uptime in seconds"
+
+pg_database_size:
+  query: |
+    SELECT datname, pg_database_size(datname)::bigint AS size_bytes
+    FROM pg_database WHERE datallowconn
+  metrics:
+    - datname:
+        usage: "LABEL"
+        description: "Database name"
+    - size_bytes:
+        usage: "GAUGE"
+        description: "Database size in bytes"
+
+pg_checkpoints:
+  query: |
+    SELECT checkpoints_timed::bigint AS timed,
+           checkpoints_req::bigint AS requested
+    FROM pg_stat_bgwriter
+  metrics:
+    - timed:
+        usage: "COUNTER"
+    - requested:
+        usage: "COUNTER"
