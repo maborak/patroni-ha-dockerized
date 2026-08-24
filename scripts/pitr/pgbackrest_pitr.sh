@@ -75,8 +75,13 @@ NODES=($(podman ps --format '{{.Names}}' | grep -E '^db[0-9]+$' | sort))
 [ ${#NODES[@]} -ge 1 ] || die "No running db nodes found"
 
 current_leader() {
-    timeout 10 podman exec "${NODES[0]}" patronictl -c /etc/patroni/patroni.yml list 2>/dev/null \
-        | awk '$4=="Leader"||$4=="primary"{print $2}' | head -1
+    local n out
+    for n in "${NODES[@]}"; do
+        out=$(timeout 8 podman exec "$n" patronictl -c /etc/patroni/patroni.yml list 2>/dev/null \
+            | grep -E '\|[[:space:]]*[^|]*Leader' | head -1 | awk -F'|' '{gsub(/[[:space:]]/,"",$2); print $2}')
+        [ -n "$out" ] && { echo "$out"; return 0; }
+    done
+    return 1
 }
 
 # ── Interactive selection when unspecified ──
@@ -88,8 +93,9 @@ if [ -z "$SERVER" ]; then
             | python3 -c 'import json,sys;d=json.load(sys.stdin);print(len(d[0].get("backup",[])))' 2>/dev/null || echo 0)
         msg "  $n  (${cnt} backup(s))"
     done
-    read -rp "Source stanza/server [default: $(current_leader || echo ${NODES[0]})]: " SERVER
-    SERVER="${SERVER:-$(current_leader || echo ${NODES[0]})}"
+    DEFAULT_SERVER=$(current_leader || echo "${NODES[0]}")
+    read -rp "Source stanza/server [default: $DEFAULT_SERVER]: " SERVER
+    SERVER="${SERVER:-$DEFAULT_SERVER}"
 fi
 
 case " ${NODES[*]} " in *" $SERVER "*) ;; *) die "$SERVER is not a running node";; esac
@@ -123,7 +129,7 @@ if [ -z "$BACKUP_ID" ]; then
     i=1
     for l in "${BL[@]}"; do msg "  $i) $l"; i=$((i+1)); done
     msg "  ${i}) latest"
-    read -rp "Backup # [default: latest]: " PICK
+    read -rp "Backup # [default: latest]: " PICK || PICK=""
     if [ -z "$PICK" ] || [ "$PICK" = "$i" ]; then
         BACKUP_ID=$(echo "${BL[-1]}" | awk '{print $1}')
     else
@@ -172,7 +178,7 @@ msg "  On completion   : $TARGET_ACTION"
 warn "The restored instance forks history at the target instant. If other nodes kept advancing past it, do NOT let them follow this node without a deliberate plan."
 msg ""
 
-[ "$ASSUME_YES" = 1 ] || { read -rp "Proceed? Type 'yes' to continue: " R; [ "$R" = "yes" ] || die "aborted by user"; }
+[ "$ASSUME_YES" = 1 ] || { read -rp "Proceed? Type 'yes' to continue: " R || R=""; [ "$R" = "yes" ] || die "aborted by user"; }
 
 if [ "$DRY_RUN" = 1 ]; then
     msg "${CYAN}Dry run — would execute:${NC}"
