@@ -91,6 +91,8 @@ else
 fi
 
 NODE_NAME=$(hostname)
+ARCHIVE_MODE="${ARCHIVE_MODE:-on}"
+export NODE_NAME ARCHIVE_COMMAND RESTORE_COMMAND ARCHIVE_MODE
     echo "Generating Patroni config for node: $NODE_NAME"
     python3 - << 'PYEOF'
 import os
@@ -125,6 +127,9 @@ subs = {
     '__PG_DEFAULT_STATISTICS_TARGET__': os.environ.get('PG_DEFAULT_STATISTICS_TARGET', '100'),
     '__PG_LOG_MIN_DURATION_STATEMENT__': os.environ.get('PG_LOG_MIN_DURATION_STATEMENT', '250ms'),
     '__PG_LOG_STATEMENT__': os.environ.get('PG_LOG_STATEMENT', 'ddl'),
+    '__ARCHIVE_MODE__': os.environ.get('ARCHIVE_MODE', 'on'),
+    '__ARCHIVE_COMMAND__': os.environ.get('ARCHIVE_COMMAND', ''),
+    '__RESTORE_COMMAND__': os.environ.get('RESTORE_COMMAND', ''),
 }
 
 with open(tpl_path, 'r') as f:
