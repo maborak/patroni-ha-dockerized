@@ -474,7 +474,16 @@ apply_settings() {
 
 resume_as_is() {
     title "Resuming existing stack"
-    echo "Starting with current .env settings (no changes made)..."
+    echo "Starting with current .env settings..."
+    if ask_yes "Enable monitoring stack (Prometheus + Grafana + alerts)?"; then
+        env_set ENABLE_MONITORING 1
+        if [ "$(env_get GRAFANA_ADMIN_PASSWORD)" = "CHANGE_ME_BEFORE_FIRST_USE" ] || [ -z "$(env_get GRAFANA_ADMIN_PASSWORD)" ]; then
+            env_set GRAFANA_ADMIN_PASSWORD "$(gen_password)"
+            echo "(Grafana admin password generated — see .env)"
+        fi
+    else
+        env_set ENABLE_MONITORING 0
+    fi
     bash "$PROJECT_ROOT/scripts/generate_configs.sh"
     docker-compose up -d --remove-orphans
     wait_healthy
