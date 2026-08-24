@@ -92,12 +92,13 @@ destroy: ## ⚠️ Destroy stack AND ALL DATA: containers, volumes (DB data, etc
 check: ## Run comprehensive health check (scripts/checks/check_stack.sh)
 	@bash scripts/checks/check_stack.sh
 
-smoke-test: ## Run end-to-end smoke tests (wizard + PITR + scale + versions + deps; sandboxed, no Docker needed)
+smoke-test: ## Run end-to-end smoke tests (wizard + PITR + scale + versions + deps + templates; sandboxed, no Docker needed)
 	@bash scripts/testing/smoke_test_wizard.sh
 	@bash scripts/testing/smoke_test_pitr.sh
 	@bash scripts/testing/smoke_test_scale.sh
 	@bash scripts/testing/smoke_test_versions.sh
 	@bash scripts/testing/smoke_test_deps.sh
+	@bash scripts/testing/smoke_test_templates.sh
 
 status: ## Show cluster status, health, and all access endpoints (HAProxy, PgBouncer, nodes, Backup)
 	@. ./.env 2>/dev/null; \
