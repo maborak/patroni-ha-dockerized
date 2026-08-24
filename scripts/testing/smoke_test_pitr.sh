@@ -31,6 +31,9 @@ cp -R "$ROOT/scripts" "$ROOT/Makefile" "$SANDBOX/"
 printf 'services: {}\n' > "$SANDBOX/docker-compose.yml"
 [ -f "$ROOT/.env" ] || { echo "No $ROOT/.env found — copy .env.example first." >&2; exit 1; }
 cp "$ROOT/.env" "$SANDBOX/.env"
+# The pitr smoke stubs the BARMAN wizard; pin the backend so the
+# perform_pitr gate routes here regardless of the host .env choice.
+sed -i 's/^BACKUP_TOOL=.*/BACKUP_TOOL=barman/' "$SANDBOX/.env"
 
 mkdir -p "$SANDBOX/bin"
 export SANDBOX

@@ -20,7 +20,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/patroni_smoke.XXXXXX")"
 FC=''
-trap 'rm -rf "$SANDBOX" "$FC"' EXIT
+if [ "${SMOKE_KEEP:-0}" = "1" ]; then trap 'echo "sandbox kept: $SANDBOX"' EXIT; else trap 'rm -rf "$SANDBOX" "$FC"' EXIT; fi
 
 FAILURES=0
 NEW_CLUSTER=wilmer
@@ -114,6 +114,7 @@ set +e
 # versions x6, apply-y. (Wizard may regenerate bin/ shims mid-run; stubs are
 # restored right after so later assertions stay isolated.)
 printf '%s\n' "$NEW_CLUSTER" "$NEW_REPLICAS" "" "" "y" "" \
+        "y" \
         "" "" "" "" "" "" "y" \
     | WIZARD_ALLOW_PIPED=1 WIZARD_SKIP_SHIMS=1 PATH="$SANDBOX/bin:$PATH" \
       bash "$SANDBOX/scripts/utils/wizard.sh" > "$WIZARD_LOG" 2>&1
@@ -249,6 +250,7 @@ echo ""
 echo "── Pristine-clone regression ──"
 FC="$(mktemp -d "${TMPDIR:-/tmp}/patroni_smoke_fresh.XXXXXX")"
 cp -R "$ROOT/scripts" "$FC/scripts"
+printf "CONTAINER_ENGINE=podman\n" > "$FC/.env"
 set +e
 OUT=$(cd "$FC" && WIZARD_ALLOW_PIPED=1 bash scripts/utils/wizard.sh </dev/null 2>&1)
 FRC=$?

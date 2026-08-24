@@ -671,6 +671,11 @@ else:
         r'\1' + etcd_block + '\n',
         content, flags=re.MULTILINE
     )
+    content = re.sub(
+        r'(^PATRONI_BASE_PORT=.*\n)',
+        r'\1' + etcd_block + '\n',
+        content, flags=re.MULTILINE
+    )
 
 # Ensure POSTGRES_VERSION is set (drives data_dir/bin_dir paths)
 if not re.search(r'^POSTGRES_VERSION=', content, flags=re.MULTILINE):
@@ -683,12 +688,16 @@ for i in range(1, ${PATRONI_NODES} + 1):
     port_entries.append(f'PATRONI_DB{i}_API_PORT={${PATRONI_API_BASE_PORT} + i - 1}')
 port_block = '\n'.join(port_entries)
 
-# Insert after PATRONI_API_BASE_PORT line
+# Insert after PATRONI_API_BASE_PORT line (fallback: PATRONI_BASE_PORT)
 content = re.sub(
     r'(^PATRONI_API_BASE_PORT=.*\n)',
     r'\1' + port_block + '\n',
-    content,
-    flags=re.MULTILINE
+    content, flags=re.MULTILINE
+)
+content = re.sub(
+    r'(^PATRONI_BASE_PORT=.*\n)',
+    r'\1' + port_block + '\n',
+    content, flags=re.MULTILINE
 )
 
 with open('${PROJECT_ROOT}/.env', 'w') as f:

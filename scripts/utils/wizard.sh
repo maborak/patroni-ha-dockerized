@@ -320,6 +320,18 @@ gather_settings() {
     [ "$W_BACKUP_TOOL" != "$def_tool" ] && [ "$IS_FRESH" = "0" ] && \
         echo -e "${YELLOW}Note: switching tools on an existing stack orphans previous backups.${NC}"
 
+    step "Monitoring"
+    local def_mon; def_mon=$(env_get ENABLE_MONITORING); def_mon=${def_mon:-0}
+    local mon_default="n"; [ "$def_mon" = "1" ] && mon_default="y"
+    while :; do
+        ask "Enable monitoring stack (Prometheus + Grafana 'Swiss Knife' dashboard + alerts) [y/n]" "$mon_default"
+        case "$ANSWER" in
+            y|Y|yes) W_MON=1; break ;;
+            n|N|no)  W_MON=0; break ;;
+            *) fail_input "$ANSWER (y or n)" ;;
+        esac
+    done
+
     step "Software versions"
     # Bootstrap-bound components: changing PostgreSQL or etcd on an existing
     # stack means destroying every volume and bootstrapping from scratch —
@@ -400,6 +412,7 @@ gather_settings() {
     echo "  PostgreSQL nodes:    :${W_BASE_PORT}..$((W_BASE_PORT + W_REPLICAS))"
     echo "  PostgreSQL:          ${W_POSTGRES_VERSION}  ·  Patroni: ${W_PATRONI_VERSION}  ·  etcd: ${W_ETCD_VERSION}"
     echo "  HAProxy/PgBouncer:   ${W_HAPROXY_VERSION} / ${W_PGBOUNCER_VERSION}  ·  pgBadger: ${W_PGBADGER_VERSION}"
+    echo "  Monitoring:          $([ "${W_MON:-0}" = "1" ] && echo "enabled (Prometheus + Grafana)" || echo "disabled")"
     echo ""
     echo "  This will:"
     echo "    - Back up .env and write these settings"
@@ -410,6 +423,11 @@ gather_settings() {
         echo "    - $([ "$IS_FRESH" = "1" ] && echo "Bootstrap a NEW cluster (leader election, ~1-2 min)" || echo "Restart the existing cluster from its data volumes")"
     fi
     echo "    - Start 3 etcd, $((W_REPLICAS + 1)) PostgreSQL, HAProxy, 2 PgBouncer, Backup"
+    if [ "${W_MON:-0}" = "1" ]; then
+        echo "    - Start Prometheus, Grafana and Alertmanager (monitoring)"
+    else
+        echo "    - (monitoring stack disabled)"
+    fi
 }
 
 apply_settings() {
@@ -442,11 +460,12 @@ apply_settings() {
     env_set PGBOUNCER_VERSION "$W_PGBOUNCER_VERSION"
     env_set PGBADGER_VERSION "$W_PGBADGER_VERSION"
 
-    if ask_yes "Enable monitoring stack (Prometheus + Grafana + alerts)?"; then
-        env_set ENABLE_MONITORING 1
-        [ "$(env_get GRAFANA_ADMIN_PASSWORD)" = "CHANGE_ME_BEFORE_FIRST_USE" ] || [ -z "$(env_get GRAFANA_ADMIN_PASSWORD)" ] &&             env_set GRAFANA_ADMIN_PASSWORD "$(gen_password)" && W_GRAF_PASS_SET=1
-    else
-        env_set ENABLE_MONITORING 0
+    env_set ENABLE_MONITORING "${W_MON:-0}"
+    if [ "${W_MON:-0}" = "1" ]; then
+        if [ "$(env_get GRAFANA_ADMIN_PASSWORD)" = "CHANGE_ME_BEFORE_FIRST_USE" ] || [ -z "$(env_get GRAFANA_ADMIN_PASSWORD)" ]; then
+            env_set GRAFANA_ADMIN_PASSWORD "$(gen_password)"
+            W_GRAF_PASS_SET=1
+        fi
     fi
 
     # Re-sync the shell environment to the new .env. common.sh exported the OLD

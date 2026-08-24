@@ -240,7 +240,7 @@ chmod +x "$SB/bin/docker-compose"
 export SHIM_LOG="$SB/shim.log"; : > "$SHIM_LOG"
 
 set +e
-printf '%s\n' "wiz1" "2" "" "" "y" "" "17" "" "3.7.1" "" "" "" "y" \
+printf '%s\n' "wiz1" "2" "" "" "y" "" "y" "17" "" "3.7.1" "" "" "" "y" \
     | WIZARD_ALLOW_PIPED=1 WIZARD_SKIP_SHIMS=1 PATH="$SB/bin:$PATH" \
       bash "$SB/scripts/utils/wizard.sh" > "$SB/wiz.log" 2>&1
 WRC=$?
@@ -266,7 +266,7 @@ run_wizard_switch() {
     # Prompts on the stopped-with-data 'c' path (cluster/admin/db are FIXED):
     # menu, replicas, ports-y, versions x6, REBUILD-guard, apply.
     local sb="$1" guard="$2"
-    printf '%s\n' "c" "" "y" "" "17" "" "" "" "" "" "$guard" "y" \
+    printf '%s\n' "c" "" "y" "" "y" "17" "" "" "" "" "" "$guard" "y" \
         | WIZARD_ALLOW_PIPED=1 WIZARD_SKIP_SHIMS=1 PATH="$sb/bin:$PATH" \
           bash "$sb/scripts/utils/wizard.sh" > "$sb/wiz.log" 2>&1
 }
@@ -306,6 +306,7 @@ export SHIM_LOG="$SB/shim.log"; : > "$SHIM_LOG"
 
 set +e
 run_wizard_switch "$SB" "REBUILD"
+sed -n "$(( $(wc -l < "$SB/wiz.log") - 12 )),$ p" "$SB/wiz.log" > /tmp/opencode/switch_tail.log 2>/dev/null || true
 WRC=$?
 set -e
 
