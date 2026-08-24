@@ -7,6 +7,19 @@ if [ -z "$BARMAN_HOME" ]; then
     BARMAN_HOME="/var/lib/backup"
 fi
 
+# pgBackRest remotes execute commands over SSH as this user; the distro's
+# stock 'backup' system user ships with /usr/sbin/nologin, which makes every
+# repo-side remote command fail with "This account is currently not available."BACKUP_SHELL=$(getent passwd backup | cut -d: -f7)
+if [ "$BACKUP_SHELL" = "/usr/sbin/nologin" ] || [ "$BACKUP_SHELL" = "/bin/false" ] || [ -z "$BACKUP_SHELL" ]; then
+    usermod -s /bin/bash backup
+    echo "Enabled /bin/bash shell for 'backup' user (was: ${BACKUP_SHELL:-none})"
+fi
+
+# Repo, log and spool paths must be writable by the backup user — root-owned
+# files here break archive-push/remote with Permission denied (exit 103).
+mkdir -p /var/lib/pgbackrest /var/log/pgbackrest /var/spool/pgbackrest
+chown -R backup:backup /var/lib/pgbackrest /var/log/pgbackrest /var/spool/pgbackrest
+
 # Create .ssh directory in backup's home directory
 mkdir -p "$BARMAN_HOME/.ssh"
 chmod 700 "$BARMAN_HOME/.ssh"
@@ -51,6 +64,18 @@ if [ -f /ssh_keys/backup_rsa ]; then
 else
     echo "WARNING: SSH key not found at /ssh_keys/backup_rsa"
 fi
+
+# Recreated containers get fresh SSH host keys, which breaks clients holding
+# stale known_hosts entries ("Host key verification failed" -> pgBackRest
+# reports [056] 'unable to find primary cluster'). Accept new keys instead.
+SSH_CONFIG=$'Host *\n    StrictHostKeyChecking accept-new\n    LogLevel ERROR'
+for SSH_HOME in /root "$BARMAN_HOME" /home/backup; do
+    mkdir -p "$SSH_HOME/.ssh"
+    printf '%s\n' "$SSH_CONFIG" > "$SSH_HOME/.ssh/config"
+    chmod 600 "$SSH_HOME/.ssh/config"
+    rm -f "$SSH_HOME/.ssh/known_hosts"
+done
+echo "SSH StrictHostKeyChecking=accept-new configured; stale known_hosts cleared"
 
 # Add public key to backup's authorized_keys so DB nodes can connect to Backup
 # This enables: DB nodes -> Backup, and loopback connections (backup -> backup)

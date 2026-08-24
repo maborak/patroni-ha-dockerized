@@ -144,7 +144,7 @@ status: ## Show cluster status, health, and all access endpoints (HAProxy, PgBou
 	echo ""; \
 	echo "=== Backup Backups ==="; \
 	if [ -n "$$LEADER" ]; then \
-		BACKUPS=$$(docker exec backup $$( [ "$$(grep -E '^BACKUP_TOOL=' .env 2>/dev/null | cut -d= -f2)" = pgbackrest ] && echo "pgbackrest info" || echo "barman list-backup" ) $$LEADER 2>/dev/null | head -5); \
+		BACKUPS=$$(docker exec -u backup backup $$( [ "$$(grep -E '^BACKUP_TOOL=' .env 2>/dev/null | cut -d= -f2)" = pgbackrest ] && echo "pgbackrest --stanza=$$LEADER info" || echo "barman list-backup $$LEADER") 2>/dev/null | head -5); \
 		if [ -n "$$BACKUPS" ]; then echo "$$BACKUPS"; else echo "  No backups listed for $$LEADER — create one: make backup"; fi; \
 	else \
 		echo "  Leader unknown — list manually: make list-backups [SERVER=dbN]"; \
@@ -238,7 +238,7 @@ backup: ## Create backup (auto-detects leader, or use SERVER=db1 to override)
 	fi; \
 	echo ""; \
 	echo "=== Step 3: Backup Check ==="; \
-	docker exec backup $$( [ "$$(grep -E '^BACKUP_TOOL=' .env 2>/dev/null | cut -d= -f2)" = pgbackrest ] && echo "pgbackrest info $$SERVER" || echo "barman check $$SERVER" ); \
+	docker exec -u backup backup $$( [ "$$(grep -E '^BACKUP_TOOL=' .env 2>/dev/null | cut -d= -f2)" = pgbackrest ] && echo "pgbackrest --stanza=$$SERVER info" || echo "barman check $$SERVER" ); \
 	CHECK_EXIT=$$?; \
 	if [ $$CHECK_EXIT -ne 0 ]; then \
 		echo ""; \
@@ -249,14 +249,14 @@ backup: ## Create backup (auto-detects leader, or use SERVER=db1 to override)
 	echo ""; \
 	echo "=== Step 4: Creating Backup ==="; \
 	echo "Creating backup of $$SERVER..."; \
-	if [ "$$(grep -E "^BACKUP_TOOL=" .env 2>/dev/null | cut -d= -f2)" = pgbackrest ]; then docker exec backup pgbackrest --stanza=$$SERVER --type=incr backup; else docker exec backup barman backup $$SERVER; fi; \
+	if [ "$$(grep -E "^BACKUP_TOOL=" .env 2>/dev/null | cut -d= -f2)" = pgbackrest ]; then docker exec -u backup backup pgbackrest --stanza=$$SERVER --type=incr backup; else docker exec -u backup backup barman backup $$SERVER; fi; \
 	BACKUP_EXIT=$$?; \
 	if [ $$BACKUP_EXIT -eq 0 ]; then \
 		echo ""; \
 		echo "✓ Backup created successfully"; \
 		echo ""; \
 		echo "=== Step 5: Listing Backups ==="; \
-		docker exec backup $$( [ "$$(grep -E '^BACKUP_TOOL=' .env 2>/dev/null | cut -d= -f2)" = pgbackrest ] && echo "pgbackrest info" || echo "barman list-backup" ) $$SERVER | head -10; \
+		docker exec -u backup backup $$( [ "$$(grep -E '^BACKUP_TOOL=' .env 2>/dev/null | cut -d= -f2)" = pgbackrest ] && echo "pgbackrest --stanza=$$SERVER info" || echo "barman list-backup $$SERVER") | head -10; \
 		echo ""; \
 		echo "To see full backup list: make list-backups SERVER=$$SERVER"; \
 	else \
@@ -275,7 +275,7 @@ list-backups: ## List backups (auto-detects leader, or use SERVER=db1 to overrid
 			echo ""; \
 			. ./.env 2>/dev/null; for i in $$(seq 1 $$(($${PATRONI_REPLICAS:-2} + 1))); do s="db$$i"; \
 				echo "=== $$s ==="; \
-				docker exec backup $$( [ "$$(grep -E '^BACKUP_TOOL=' .env 2>/dev/null | cut -d= -f2)" = pgbackrest ] && echo "pgbackrest info" || echo "barman list-backup" ) $$s 2>/dev/null || echo "No backups or server not configured"; \
+				docker exec -u backup backup $$( [ "$$(grep -E '^BACKUP_TOOL=' .env 2>/dev/null | cut -d= -f2)" = pgbackrest ] && echo "pgbackrest --stanza=$$s info" || echo "barman list-backup $$s") 2>/dev/null || echo "No backups or server not configured"; \
 				echo ""; \
 			done; \
 			exit 0; \
@@ -286,7 +286,7 @@ list-backups: ## List backups (auto-detects leader, or use SERVER=db1 to overrid
 		echo "Using specified server: $$SERVER"; \
 	fi; \
 	echo "=== Backups for $$SERVER ==="; \
-	docker exec backup $$( [ "$$(grep -E '^BACKUP_TOOL=' .env 2>/dev/null | cut -d= -f2)" = pgbackrest ] && echo "pgbackrest info" || echo "barman list-backup" ) $$SERVER
+	docker exec -u backup backup $$( [ "$$(grep -E '^BACKUP_TOOL=' .env 2>/dev/null | cut -d= -f2)" = pgbackrest ] && echo "pgbackrest --stanza=$$SERVER info" || echo "barman list-backup $$SERVER")
 
 show-backups: ## Show backup details (usage: make show-backups SERVER=db1 BACKUP_ID=20260123T120000)
 	@if [ -z "$(SERVER)" ] || [ -z "$(BACKUP_ID)" ]; then \
@@ -296,12 +296,12 @@ show-backups: ## Show backup details (usage: make show-backups SERVER=db1 BACKUP
 		echo "  make list-backups SERVER=db1"; \
 		exit 1; \
 	fi
-	@docker exec backup $$( [ "$$(grep -E '^BACKUP_TOOL=' .env 2>/dev/null | cut -d= -f2)" = pgbackrest ] && echo "pgbackrest info $(SERVER)" || echo "barman show-backup $(SERVER) $(BACKUP_ID)" )
+	@docker exec -u backup backup $$( [ "$$(grep -E '^BACKUP_TOOL=' .env 2>/dev/null | cut -d= -f2)" = pgbackrest ] && echo "pgbackrest --stanza=$(SERVER) info" || echo "barman show-backup $(SERVER) $(BACKUP_ID)" )
 
 check-archive: ## Check WAL archiving status on leader
 	@if [ "$$(grep -E '^BACKUP_TOOL=' .env 2>/dev/null | cut -d= -f2)" = pgbackrest ]; then \
 		L=$$(docker exec db1 patronictl -c /etc/patroni/patroni.yml list 2>/dev/null | grep Leader | awk '{print $$2}'); \
-		docker exec backup pgbackrest --stanza=$${L:-db1} check || true; \
+		docker exec -u backup backup pgbackrest --stanza=$${L:-db1} check || true; \
 	else \
 		bash scripts/backup/check_archive_command.sh; \
 	fi

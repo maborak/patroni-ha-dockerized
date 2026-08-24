@@ -12,6 +12,22 @@ mkdir -p "$POSTGRES_HOME/.ssh"
 chmod 700 "$POSTGRES_HOME/.ssh"
 chown postgres:postgres "$POSTGRES_HOME/.ssh"
 
+# Recreated peer containers (backup, etc.) get fresh SSH host keys; stale
+# known_hosts entries make archive_command fail with "Host key verification
+# failed". Accept new keys within the compose network instead.
+cat > "$POSTGRES_HOME/.ssh/config" << 'SSHCFG'
+Host *
+    StrictHostKeyChecking accept-new
+    LogLevel ERROR
+SSHCFG
+chown postgres:postgres "$POSTGRES_HOME/.ssh/config"
+chmod 600 "$POSTGRES_HOME/.ssh/config"
+rm -f "$POSTGRES_HOME/.ssh/known_hosts"
+mkdir -p /root/.ssh
+printf 'Host *\n    StrictHostKeyChecking accept-new\n    LogLevel ERROR\n' > /root/.ssh/config
+chmod 600 /root/.ssh/config
+rm -f /root/.ssh/known_hosts
+
 # Copy SSH key from mounted location to postgres home directory
 # This key will be used for all SSH connections (to Backup and other DB nodes)
 if [ -f /ssh_keys/backup_rsa ]; then

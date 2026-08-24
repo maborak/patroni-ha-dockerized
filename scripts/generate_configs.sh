@@ -258,7 +258,7 @@ if [ "$BACKUP_TOOL" = "pgbackrest" ]; then
     BACKUP_DOCKERFILE="Dockerfile.pgbackrest"
     BACKUP_CONF_FILE="configs/pgbackrest-repo.conf"
     BACKUP_CONF_MOUNT='- ./configs/pgbackrest-repo.conf:/etc/pgbackrest/pgbackrest.conf:ro'
-    BACKUP_HEALTHCHECK='["CMD-SHELL", "pgbackrest info db1 >/dev/null 2>&1 || exit 1"]'
+    BACKUP_HEALTHCHECK='["CMD-SHELL", "pgbackrest --stanza=db1 info >/dev/null 2>&1 || exit 1"]'
 fi
 
 # Render pgBackRest config (shared: mounted on backup host AND every node).
@@ -288,6 +288,13 @@ import re
 repo = re.sub(r'^repo1-host=.*\n', '', c, flags=re.M)
 with open(os.environ['PROJECT_ROOT'] + '/configs/pgbackrest-repo.conf', 'w') as f:
     f.write(repo)
+# Node-side view: keep repo1-host (WAL push target) but strip pg1-host —
+# a node running archive-push locally must not see BOTH pg and repo as
+# remote, or pgBackRest aborts with 'pg and repo hosts cannot both be
+# configured as remote' (exit 27).
+node = re.sub(r'^pg1-host.*\n', '', c, flags=re.M)
+with open(os.environ['PROJECT_ROOT'] + '/configs/pgbackrest-node.conf', 'w') as f:
+    f.write(node)
 PYBACKEND
 fi
 
@@ -423,7 +430,7 @@ done
 
 # Write intermediate files for python to read (avoids shell quoting issues)
 NODE_BACKUP_CONF_MOUNT=""
-[ "$BACKUP_TOOL" = "pgbackrest" ] && NODE_BACKUP_CONF_MOUNT='      - ./configs/pgbackrest.conf:/etc/pgbackrest/pgbackrest.conf:ro'
+[ "$BACKUP_TOOL" = "pgbackrest" ] && NODE_BACKUP_CONF_MOUNT='      - ./configs/pgbackrest-node.conf:/etc/pgbackrest/pgbackrest.conf:ro'
 printf '%s' "$(printf '%s' "$DB_SERVICES" | sed "s|__NODE_BACKUP_CONF_MOUNT__|$NODE_BACKUP_CONF_MOUNT|")" > /tmp/_gen_db_services.txt
 printf '%s' "$DB_DEPENDS_ON" > /tmp/_gen_db_depends.txt
 printf '%s' "$DB_VOLUMES" > /tmp/_gen_db_volumes.txt

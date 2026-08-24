@@ -71,6 +71,7 @@ __DB_SERVICES__
     volumes:
       - backup_data:/var/lib/backup
       - backup_repo:/data/pg-backup
+      - backup_pgbackrest_repo:/var/lib/pgbackrest
       __BACKUP_CONF_MOUNT__
       - ./ssh_keys/backup_rsa:/ssh_keys/backup_rsa:ro
       - ./ssh_keys/backup_rsa.pub:/ssh_keys/backup_rsa.pub:ro
@@ -205,5 +206,6 @@ __ETCD_VOLUMES__
 __DB_VOLUMES__
   backup_data:
   backup_repo:
+  backup_pgbackrest_repo:
   pgbadger_raw:
   pgbadger_reports:

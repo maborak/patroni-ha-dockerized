@@ -3,7 +3,8 @@
 # AND every DB node. Node-side entries (repo1-host) are ignored by the repo
 # host itself; pg1-* entries are ignored during archive-push.
 [global]
-repo1-type=path
+allow-root=y
+repo1-type=posix
 repo1-path=/var/lib/pgbackrest
 repo1-retention-full=__PG_BACKUP_RETENTION_FULL__
 repo1-host-user=backup
