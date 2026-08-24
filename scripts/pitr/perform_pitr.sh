@@ -12,11 +12,13 @@ set -e
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# ── Backend gate: PITR wizard currently drives the barman backend only ──
+# ── Backend gate: route to the matching PITR implementation ──
 BACKUP_TOOL="$(grep -E '^BACKUP_TOOL=' "${PROJECT_ROOT:-$PWD}/.env" 2>/dev/null | tail -1 | cut -d= -f2)"
+if [ "${BACKUP_TOOL:-barman}" = "pgbackrest" ]; then
+    exec bash "$SCRIPT_DIR/pgbackrest_pitr.sh" "$@"
+fi
 if [ "${BACKUP_TOOL:-barman}" != "barman" ]; then
-    echo "✗ PITR wizard supports BACKUP_TOOL=barman only (found: $BACKUP_TOOL)." >&2
-    echo "  pgBackRest restores: pgbackrest restore --stanza=dbN --delta (runbook pending)." >&2
+    echo "✗ Unsupported BACKUP_TOOL: $BACKUP_TOOL (expected barman or pgbackrest)." >&2
     exit 1
 fi
 
