@@ -19,6 +19,7 @@ source "$SCRIPT_DIR/../lib/common.sh"
 DB=""
 NODE=""
 OUTPUT_DIR="$PROJECT_ROOT/backups"
+TARGET_SPEC=""          # file | folder | user@host:/path  (overrides --output)
 JOBS=4
 INTERACTIVE=false
 ASSUME_YES=false
@@ -32,7 +33,8 @@ Creates a logical backup (.tgz) of a single database from a healthy replica.
 Options:
   --db NAME           Database name to back up (required unless --interactive)
   --node dbN          Force specific source node (default: auto-pick healthy replica)
-  --output DIR        Host directory for the .tgz (default: ./backups)
+  --output DIR        Host staging directory (default: ./backups)
+  --target SPEC       Destination: folder | /path/file.tgz | user@host:/path (scp)
   --jobs N            pg_dump parallel jobs (default: 4)
   --interactive       Prompt for DB selection from a numbered list
   --yes               Skip the Start/Cancel confirmation
@@ -50,6 +52,7 @@ while [ $# -gt 0 ]; do
         --db) DB="$2"; shift 2 ;;
         --node) NODE="$2"; shift 2 ;;
         --output) OUTPUT_DIR="$2"; shift 2 ;;
+        --target) TARGET_SPEC="$2"; shift 2 ;;
         --jobs) JOBS="$2"; shift 2 ;;
         --interactive) INTERACTIVE=true; shift ;;
         --yes|-y) ASSUME_YES=true; shift ;;
@@ -83,6 +86,34 @@ fi
 INTERNAL_PORT=$(get_internal_pg_port)
 
 # --- Interactive DB selection -------------------------------------------------
+# ── Resolve destination (file / folder / remote) ──
+TARGET_TYPE="folder"
+REMOTE_DEST=""
+classify() {
+    case "$1" in
+        *[a-zA-Z0-9]@[A-Za-z0-9]*:*) TARGET_TYPE="remote"; REMOTE_DEST="$1" ;;
+        *.tgz|*.tar.gz)              TARGET_TYPE="file" ;;
+        *)                           TARGET_TYPE="folder" ;;
+    esac
+}
+[ -n "$TARGET_SPEC" ] && classify "$TARGET_SPEC"
+
+if [ "$INTERACTIVE" = true ]; then
+    echo "" >&2
+    echo -e "${BLUE}${BOLD}Dump target${NC}" >&2
+    echo -e "  ${CYAN}1)${NC} Default folder   ($OUTPUT_DIR)" >&2
+    echo -e "  ${CYAN}2)${NC} Custom folder    (auto filename inside)" >&2
+    echo -e "  ${CYAN}3)${NC} Exact .tgz file  (full path)" >&2
+    echo -e "  ${CYAN}4)${NC} Remote host      (scp user@host:/path)" >&2
+    echo -ne "${BOLD}Target [1]: ${NC}" >&2
+    read -r tchoice; tchoice=${tchoice:-1}
+    case "$tchoice" in
+        2) printf 'Folder path: ' >&2; read -r tf; [ -n "$tf" ] && { TARGET_SPEC="$tf"; classify "$tf"; } ;;
+        3) printf 'File path (.tgz): ' >&2; read -r tf; [ -n "$tf" ] || { echo -e "${RED}✗ path required${NC}" >&2; exit 1; }; TARGET_SPEC="$tf"; classify "$tf" ;;
+        4) printf 'Remote (user@host:/dir or :/file.tgz): ' >&2; read -r tr; [ -n "$tr" ] || { echo -e "${RED}✗ remote required${NC}" >&2; exit 1; }; TARGET_SPEC="$tr"; classify "$tr" ;;
+    esac
+fi
+
 if [ "$INTERACTIVE" = true ] || [ -z "$DB" ]; then
     echo -e "${YELLOW}Discovering databases on ${NODE}...${NC}" >&2
     DBS_RAW=$(docker exec "$NODE" psql -U postgres -d postgres -p "$INTERNAL_PORT" -h localhost -t -A -c \
@@ -125,12 +156,26 @@ if [ "$EXISTS" != "1" ]; then
 fi
 
 # --- Prepare paths ------------------------------------------------------------
+case "$TARGET_TYPE" in
+    folder) OUTPUT_DIR="$TARGET_SPEC" ;;
+    file)   HOST_TGZ="$TARGET_SPEC" ;;
+esac
 mkdir -p "$OUTPUT_DIR"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 DUMP_NAME="${DB}_${TIMESTAMP}"
 CONTAINER_DUMP_DIR="/tmp/${DUMP_NAME}"
 CONTAINER_TGZ="/tmp/${DUMP_NAME}.tgz"
-HOST_TGZ="${OUTPUT_DIR}/${DUMP_NAME}.tgz"
+[ "$TARGET_TYPE" != "file" ] && HOST_TGZ="${OUTPUT_DIR}/${DUMP_NAME}.tgz"
+
+DEST_DESC="$HOST_TGZ"
+if [ "$TARGET_TYPE" = "remote" ]; then
+    case "$REMOTE_DEST" in
+        *:) REMOTE_PATH="/${DUMP_NAME}.tgz"; REMOTE_DEST="${REMOTE_DEST}${DUMP_NAME}.tgz" ;;
+        *.tgz) REMOTE_PATH="" ;;   # full file target given
+        *)  REMOTE_DEST="${REMOTE_DEST}/${DUMP_NAME}.tgz" ;;
+    esac
+    DEST_DESC="scp → ${REMOTE_DEST}  (local staging copy kept at ${HOST_TGZ})"
+fi
 
 # --- Gather pre-flight info: DB size and active connections ------------------
 DB_LIT="'${DB//\'/\'\'}'"
@@ -149,7 +194,7 @@ echo -e "${BLUE}${BOLD}=== Backup Plan ===${NC}"
 echo -e "  ${CYAN}Database:${NC}    $DB  (${DB_SIZE:-unknown})"
 echo -e "  ${CYAN}Source node:${NC} $NODE"
 echo -e "  ${CYAN}Jobs:${NC}        $JOBS  (pg_dump -Fd parallel)"
-echo -e "  ${CYAN}Output:${NC}      $HOST_TGZ"
+echo -e "  ${CYAN}Target:${NC}      $TARGET_TYPE → $DEST_DESC"
 if [ "$ACTIVE_COUNT" -gt 0 ]; then
     echo -e "  ${CYAN}Active conns:${NC} ${YELLOW}${ACTIVE_COUNT}${NC} (informational — pg_dump runs alongside)"
     printf '%s\n' "$ACTIVE_DETAIL" | head -3 | awk -F'|' '{printf "      • pid=%s user=%s app=%s addr=%s state=%s\n", $1, $2, $3, $4, $5}'
@@ -188,16 +233,34 @@ echo -e "${YELLOW}[2/3] Packaging into .tgz inside container...${NC}"
 docker exec "$NODE" tar -czf "$CONTAINER_TGZ" -C /tmp "$DUMP_NAME"
 echo -e "${GREEN}✓ Packaged${NC}"
 
-echo -e "${YELLOW}[3/3] Copying to host...${NC}"
+echo -e "${YELLOW}[3/4] Copying to host staging...${NC}"
 docker cp "$NODE:$CONTAINER_TGZ" "$HOST_TGZ"
 echo -e "${GREEN}✓ Copied${NC}"
+
+if [ "$TARGET_TYPE" = "remote" ]; then
+    echo -e "${YELLOW}[4/4] Transferring to remote (${REMOTE_DEST})...${NC}"
+    RHOST="${REMOTE_DEST%%:*}"
+    RPATH="${REMOTE_DEST#*:}"
+    RDIR="${RPATH%/*}"
+    ssh -o BatchMode=yes "$RHOST" "mkdir -p '$RDIR'" 2>/dev/null || \
+        echo -e "${YELLOW}⚠ could not pre-create remote dir (continuing)${NC}" >&2
+    if scp -q "$HOST_TGZ" "$REMOTE_DEST"; then
+        echo -e "${GREEN}✓ Remote copy complete${NC}"
+    else
+        echo -e "${RED}✗ scp failed — dump remains locally at: $HOST_TGZ${NC}" >&2
+        exit 1
+    fi
+else
+    echo -e "${YELLOW}[4/4] Done${NC}"
+fi
 
 DURATION=$(($(date +%s) - START_TS))
 SIZE=$(du -h "$HOST_TGZ" 2>/dev/null | awk '{print $1}')
 
 echo ""
 echo -e "${BLUE}${BOLD}=== Backup Complete ===${NC}"
-echo -e "  ${CYAN}File:${NC}     $HOST_TGZ"
+echo -e "  ${CYAN}Local file:${NC} $HOST_TGZ"
+[ "$TARGET_TYPE" = "remote" ] && echo -e "  ${CYAN}Remote copy:${NC} $REMOTE_DEST"
 echo -e "  ${CYAN}Size:${NC}     ${SIZE:-?}"
 echo -e "  ${CYAN}Duration:${NC} ${DURATION}s"
 echo -e "  ${CYAN}Source:${NC}   $NODE (replica)"

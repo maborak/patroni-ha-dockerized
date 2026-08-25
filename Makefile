@@ -341,11 +341,12 @@ check-archive: ## Check WAL archiving status on leader
 		bash scripts/backup/check_archive_command.sh; \
 	fi
 
-dump-db: ## Logical .tgz backup of a single DB from a healthy replica (DB=name [NODE=db3] [JOBS=8] [OUTPUT=./backups] [YES=1])
+dump-db: ## Logical .tgz backup of a single DB from a healthy replica (DB=name [NODE=db3] [JOBS=8] [TARGET=folder|file.tgz|user@host:/p] [OUTPUT=./backups] [YES=1] or interactive)
 	@bash scripts/backup/dump_database.sh \
 		$(if $(DB),--db $(DB),--interactive) \
 		$(if $(NODE),--node $(NODE),) \
 		$(if $(JOBS),--jobs $(JOBS),) \
+		$(if $(TARGET),--target $(TARGET),) \
 		$(if $(OUTPUT),--output $(OUTPUT),) \
 		$(if $(filter 1,$(YES)),--yes,)
 
