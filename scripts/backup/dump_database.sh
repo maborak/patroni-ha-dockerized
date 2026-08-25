@@ -1,15 +1,22 @@
 #!/bin/bash
-# scripts/backup/dump_database.sh — Logical backup (pg_dump) of a single database
-# from a healthy replica, packaged as a .tgz on the host.
+# scripts/backup/dump_database.sh — Logical backup (pg_dump) of a single database.
 #
-# Backup is taken from a replica (selected via Patroni REST API) to avoid loading
-# the cluster leader. Falls back to leader only if explicitly forced via --node.
+# Sources:
+#   • this Patroni cluster — always dumped from a healthy replica (never the
+#     leader) unless a specific node is forced via --node;
+#   • any remote PostgreSQL reachable from this host, given a libpq URI
+#     (--from postgresql://user:pass@host:port/db).
+#
+# Destinations:
+#   • folder   → <dir>/<db>_<ts>.tgz
+#   • file     → exact .tgz path
 #
 # Usage:
 #   bash scripts/backup/dump_database.sh --db maborak
 #   bash scripts/backup/dump_database.sh --interactive
-#   bash scripts/backup/dump_database.sh --db mydb --jobs 8 --output ./mybackups
-#   bash scripts/backup/dump_database.sh --db maborak --node db3   # force source node
+#   bash scripts/backup/dump_database.sh --from postgresql://u:p@host:5432/app \
+#        --target /srv/dumps
+#   bash scripts/backup/dump_database.sh --db mydb --jobs 8
 
 set -e
 
@@ -18,38 +25,41 @@ source "$SCRIPT_DIR/../lib/common.sh"
 
 DB=""
 NODE=""
+FROM_URI=""              # postgresql:// remote source (overrides local cluster)
 OUTPUT_DIR="$PROJECT_ROOT/backups"
-TARGET_SPEC=""          # file | folder | user@host:/path  (overrides --output)
+TARGET_SPEC=""           # folder | /path/file.tgz
 JOBS=4
 INTERACTIVE=false
 ASSUME_YES=false
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") [--db NAME] [--node dbN] [--output DIR] [--jobs N] [--interactive] [--yes]
+Usage: $(basename "$0") [--db NAME | --from URI] [--node dbN] [--target DIR|FILE]
+                       [--output DIR] [--jobs N] [--interactive] [--yes]
 
-Creates a logical backup (.tgz) of a single database from a healthy replica.
+Logical backup (.tgz) of a single database.
+
+Sources:
+  --db NAME           Database on THIS cluster (dumped from a healthy replica)
+  --from URI          Remote libpq source, e.g. postgresql://u:p@host:5432/db
+                      (dumped via an ephemeral postgres client container)
+
+Destinations (--target):
+  DIR                 <DIR>/<db>_<timestamp>.tgz          (default: ./backups)
+  /path/file.tgz      exact output file
 
 Options:
-  --db NAME           Database name to back up (required unless --interactive)
-  --node dbN          Force specific source node (default: auto-pick healthy replica)
-  --output DIR        Host staging directory (default: ./backups)
-  --target SPEC       Destination: folder | /path/file.tgz | user@host:/path (scp)
+  --node dbN          Force specific source node (local cluster only)
   --jobs N            pg_dump parallel jobs (default: 4)
-  --interactive       Prompt for DB selection from a numbered list
-  --yes               Skip the Start/Cancel confirmation
-  -h, --help          Show this help
-
-Examples:
-  $(basename "$0") --db maborak
-  $(basename "$0") --interactive
-  $(basename "$0") --db mydb --jobs 8 --output ./mybackups
+  --interactive       Guided prompts (source, database, destination)
+  --yes               Skip confirmations
 EOF
 }
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --db) DB="$2"; shift 2 ;;
+        --from|--dsn) FROM_URI="$2"; shift 2 ;;
         --node) NODE="$2"; shift 2 ;;
         --output) OUTPUT_DIR="$2"; shift 2 ;;
         --target) TARGET_SPEC="$2"; shift 2 ;;
@@ -61,152 +71,114 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-if ! [[ "$JOBS" =~ ^[0-9]+$ ]] || [ "$JOBS" -lt 1 ]; then
-    echo -e "${RED}✗ --jobs must be a positive integer (got: $JOBS)${NC}" >&2
-    exit 1
-fi
+[ -n "$FROM_URI" ] && [ -n "$DB" ] && die "--db and --from are mutually exclusive"
+case "${FROM_URI:-}" in
+    postgresql://*|postgres://*) ;;
+    "") ;;
+    *) die "--from must be a postgresql:// URI" ;;
+esac
 
-# --- Pick source node ---------------------------------------------------------
-if [ -z "$NODE" ]; then
-    echo -e "${YELLOW}Finding a healthy replica...${NC}" >&2
-    if ! NODE=$(detect_healthy_replica); then
-        echo -e "${RED}✗ No healthy replica available.${NC}" >&2
-        echo -e "${YELLOW}  Override with --node dbN (e.g. the leader) if you must.${NC}" >&2
-        exit 1
-    fi
-    echo -e "${GREEN}✓ Using replica: ${NODE}${NC}" >&2
-else
-    validate_node "$NODE" || exit 1
-    LEADER=$(detect_leader_api 2>/dev/null || echo "")
-    if [ "$NODE" = "$LEADER" ]; then
-        echo -e "${YELLOW}⚠ Warning: ${NODE} is the cluster leader. Dump will load the primary.${NC}" >&2
-    fi
-fi
-
-INTERNAL_PORT=$(get_internal_pg_port)
-
-# --- Interactive DB selection -------------------------------------------------
-# ── Resolve destination (file / folder / remote) ──
+# ── Destination classification ──────────────────────────────────────────
 TARGET_TYPE="folder"
-REMOTE_DEST=""
 classify() {
-    case "$1" in
-        *[a-zA-Z0-9]@[A-Za-z0-9]*:*) TARGET_TYPE="remote"; REMOTE_DEST="$1" ;;
-        *.tgz|*.tar.gz)              TARGET_TYPE="file" ;;
-        *)                           TARGET_TYPE="folder" ;;
-    esac
+    case "$1" in *.tgz|*.tar.gz) TARGET_TYPE="file" ;; *) TARGET_TYPE="folder" ;; esac
 }
 [ -n "$TARGET_SPEC" ] && classify "$TARGET_SPEC"
 
-if [ "$INTERACTIVE" = true ]; then
+# ── Resolve SOURCE ───────────────────────────────────────────────────────
+if [ "$INTERACTIVE" = true ] && [ -z "$FROM_URI" ]; then
     echo "" >&2
-    echo -e "${BLUE}${BOLD}Dump target${NC}" >&2
-    echo -e "  ${CYAN}1)${NC} Default folder   ($OUTPUT_DIR)" >&2
-    echo -e "  ${CYAN}2)${NC} Custom folder    (auto filename inside)" >&2
-    echo -e "  ${CYAN}3)${NC} Exact .tgz file  (full path)" >&2
-    echo -e "  ${CYAN}4)${NC} Remote host      (scp user@host:/path)" >&2
-    echo -ne "${BOLD}Target [1]: ${NC}" >&2
-    read -r tchoice; tchoice=${tchoice:-1}
-    case "$tchoice" in
-        2) printf 'Folder path: ' >&2; read -r tf; [ -n "$tf" ] && { TARGET_SPEC="$tf"; classify "$tf"; } ;;
-        3) printf 'File path (.tgz): ' >&2; read -r tf; [ -n "$tf" ] || { echo -e "${RED}✗ path required${NC}" >&2; exit 1; }; TARGET_SPEC="$tf"; classify "$tf" ;;
-        4) printf 'Remote (user@host:/dir or :/file.tgz): ' >&2; read -r tr; [ -n "$tr" ] || { echo -e "${RED}✗ remote required${NC}" >&2; exit 1; }; TARGET_SPEC="$tr"; classify "$tr" ;;
-    esac
+    echo -e "${BLUE}${BOLD}Source${NC}" >&2
+    echo -e "  ${CYAN}1)${NC} This cluster (healthy replica)" >&2
+    echo -e "  ${CYAN}2)${NC} Remote PostgreSQL URL" >&2
+    echo -ne "${BOLD}Source [1]: ${NC}" >&2
+    read -r schoice; schoice=${schoice:-1}
+    if [ "$schoice" = "2" ]; then
+        read -rp "URL (postgresql://user:pass@host:port/db): " FROM_URI >&2
+        [ -n "$FROM_URI" ] || { echo -e "${RED}✗ URL required${NC}" >&2; exit 1; }
+    fi
 fi
 
-if [ "$INTERACTIVE" = true ] || [ -z "$DB" ]; then
-    echo -e "${YELLOW}Discovering databases on ${NODE}...${NC}" >&2
-    DBS_RAW=$(docker exec "$NODE" psql -U postgres -d postgres -p "$INTERNAL_PORT" -h localhost -t -A -c \
-        "SELECT datname FROM pg_database WHERE datistemplate = false AND datname <> 'postgres' ORDER BY datname;" 2>/dev/null || true)
+if [ -z "$FROM_URI" ]; then
+    # ---- LOCAL CLUSTER SOURCE -------------------------------------------
+    if [ "$INTERACTIVE" = true ] || [ -z "$DB" ]; then
+        INTERNAL_PORT=5431
+        if [ -z "$NODE" ]; then
+            NODE=$(timeout 10 podman exec db1 patronictl -c /etc/patroni/patroni.yml list 2>/dev/null \
+                | awk '$4=="Replica" && $6=="streaming"{print $2}' | head -1)
+            NODE=${NODE:-$(timeout 10 podman exec db1 patronictl -c /etc/patroni/patroni.yml list 2>/dev/null \
+                | awk '$4=="Leader"{print $2}' | head -1)}
+        fi
+        [ -n "$NODE" ] || { echo -e "${RED}✗ no healthy node found${NC}" >&2; exit 1; }
 
-    if [ -z "$DBS_RAW" ]; then
-        echo -e "${RED}✗ No user databases found on ${NODE}.${NC}" >&2
-        exit 1
+        DBS_RAW=$(docker exec "$NODE" psql -U postgres -d postgres -p "$INTERNAL_PORT" -h localhost -t -A -c \
+            "SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate ORDER BY 1;" 2>/dev/null)
+        [ -n "$DBS_RAW" ] || { echo -e "${RED}✗ cannot list databases on $NODE${NC}" >&2; exit 1; }
+
+        DB_ARRAY=()
+        while IFS= read -r line; do
+            [[ -n "$line" ]] && DB_ARRAY+=("$line")
+        done <<< "$DBS_RAW"
+
+        echo "" >&2
+        echo -e "${BLUE}${BOLD}Available databases on ${NODE}:${NC}" >&2
+        for idx in "${!DB_ARRAY[@]}"; do
+            echo -e "  ${CYAN}$((idx + 1)))${NC} ${DB_ARRAY[$idx]}" >&2
+        done
+        echo "" >&2
+        echo -ne "${BOLD}Select database [1-${#DB_ARRAY[@]}]: ${NC}" >&2
+        read -r choice
+        if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#DB_ARRAY[@]}" ]; then
+            echo -e "${RED}✗ Invalid choice.${NC}" >&2
+            exit 1
+        fi
+        DB="${DB_ARRAY[$((choice - 1))]}"
+        echo -e "${GREEN}✓ Selected: $DB${NC}" >&2
     fi
 
-    DB_ARRAY=()
-    while IFS= read -r d; do
-        [ -z "$d" ] && continue
-        DB_ARRAY+=("$d")
-    done <<< "$DBS_RAW"
-
-    echo "" >&2
-    echo -e "${BLUE}${BOLD}Available databases on ${NODE}:${NC}" >&2
-    for idx in "${!DB_ARRAY[@]}"; do
-        echo -e "  ${CYAN}$((idx + 1)))${NC} ${DB_ARRAY[$idx]}" >&2
-    done
-    echo "" >&2
-
-    echo -ne "${BOLD}Select database [1-${#DB_ARRAY[@]}]: ${NC}" >&2
-    read -r choice
-    if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#DB_ARRAY[@]}" ]; then
-        echo -e "${RED}✗ Invalid choice.${NC}" >&2
-        exit 1
-    fi
-    DB="${DB_ARRAY[$((choice - 1))]}"
-    echo -e "${GREEN}✓ Selected: $DB${NC}" >&2
+    EXISTS=$(docker exec "$NODE" psql -U postgres -d postgres -p "$INTERNAL_PORT" -h localhost -t -A -c \
+        "SELECT 1 FROM pg_database WHERE datname = '${DB//\'/\'\'}';" 2>/dev/null | tr -d ' ')
+    [ "$EXISTS" = "1" ] || { echo -e "${RED}✗ Database '$DB' not found on ${NODE}.${NC}" >&2; exit 1; }
+    SOURCE_DESC="cluster replica/node: $NODE"
+else
+    # ---- REMOTE URI SOURCE ----------------------------------------------
+    DB=$(python3 - "$FROM_URI" << 'PY'
+import sys, urllib.parse as up
+u = up.urlparse(sys.argv[1])
+print(up.unquote(u.path.lstrip('/')) or 'postgres')
+PY
+)
+    SOURCE_DESC="remote: $(echo "$FROM_URI" | sed -E 's#//[^@]*@#//***:@#')"
 fi
 
-# --- Verify DB exists on source node ------------------------------------------
-EXISTS=$(docker exec "$NODE" psql -U postgres -d postgres -p "$INTERNAL_PORT" -h localhost -t -A -c \
-    "SELECT 1 FROM pg_database WHERE datname = '${DB//\'/\'\'}';" 2>/dev/null | tr -d ' ')
-if [ "$EXISTS" != "1" ]; then
-    echo -e "${RED}✗ Database '$DB' not found on ${NODE}.${NC}" >&2
-    exit 1
-fi
-
-# --- Prepare paths ------------------------------------------------------------
+# ── Prepare paths ────────────────────────────────────────────────────────
 case "$TARGET_TYPE" in
+    file)   OUTPUT_DIR="$(dirname "$TARGET_SPEC")" ;;
     folder) OUTPUT_DIR="$TARGET_SPEC" ;;
-    file)   HOST_TGZ="$TARGET_SPEC" ;;
 esac
 mkdir -p "$OUTPUT_DIR"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 DUMP_NAME="${DB}_${TIMESTAMP}"
-CONTAINER_DUMP_DIR="/tmp/${DUMP_NAME}"
-CONTAINER_TGZ="/tmp/${DUMP_NAME}.tgz"
-[ "$TARGET_TYPE" != "file" ] && HOST_TGZ="${OUTPUT_DIR}/${DUMP_NAME}.tgz"
+FINAL_PATH="$OUTPUT_DIR/${DUMP_NAME}.tgz"
 
-DEST_DESC="$HOST_TGZ"
-if [ "$TARGET_TYPE" = "remote" ]; then
-    case "$REMOTE_DEST" in
-        *:) REMOTE_PATH="/${DUMP_NAME}.tgz"; REMOTE_DEST="${REMOTE_DEST}${DUMP_NAME}.tgz" ;;
-        *.tgz) REMOTE_PATH="" ;;   # full file target given
-        *)  REMOTE_DEST="${REMOTE_DEST}/${DUMP_NAME}.tgz" ;;
-    esac
-    DEST_DESC="scp → ${REMOTE_DEST}  (local staging copy kept at ${HOST_TGZ})"
-fi
-
-# --- Gather pre-flight info: DB size and active connections ------------------
-DB_LIT="'${DB//\'/\'\'}'"
-DB_SIZE=$(docker exec "$NODE" psql -U postgres -d postgres -p "$INTERNAL_PORT" -h localhost -t -A -c \
-    "SELECT pg_size_pretty(pg_database_size(${DB_LIT}));" 2>/dev/null | tr -d ' ')
-
-ACTIVE_COUNT=0
-ACTIVE_DETAIL=$(docker exec "$NODE" psql -U postgres -d postgres -p "$INTERNAL_PORT" -h localhost -t -A -F'|' -c \
-    "SELECT pid, COALESCE(usename,'?'), COALESCE(NULLIF(application_name,''),'?'), COALESCE(client_addr::text,'local'), state FROM pg_stat_activity WHERE datname = ${DB_LIT} AND pid <> pg_backend_pid() ORDER BY backend_start;" 2>/dev/null || true)
-if [ -n "$ACTIVE_DETAIL" ]; then
-    ACTIVE_COUNT=$(printf '%s\n' "$ACTIVE_DETAIL" | grep -c '^[0-9]' || true)
+# ── Pre-flight info ──────────────────────────────────────────────────────
+if [ -z "$FROM_URI" ]; then
+    DB_SIZE=$(docker exec "$NODE" psql -U postgres -d postgres -p "$INTERNAL_PORT" -h localhost -t -A -c \
+        "SELECT pg_size_pretty(pg_database_size('${DB//\'/\'\'}'));" 2>/dev/null | tr -d ' ')
 fi
 
 echo ""
-echo -e "${BLUE}${BOLD}=== Backup Plan ===${NC}"
-echo -e "  ${CYAN}Database:${NC}    $DB  (${DB_SIZE:-unknown})"
-echo -e "  ${CYAN}Source node:${NC} $NODE"
-echo -e "  ${CYAN}Jobs:${NC}        $JOBS  (pg_dump -Fd parallel)"
-echo -e "  ${CYAN}Target:${NC}      $TARGET_TYPE → $DEST_DESC"
-if [ "$ACTIVE_COUNT" -gt 0 ]; then
-    echo -e "  ${CYAN}Active conns:${NC} ${YELLOW}${ACTIVE_COUNT}${NC} (informational — pg_dump runs alongside)"
-    printf '%s\n' "$ACTIVE_DETAIL" | head -3 | awk -F'|' '{printf "      • pid=%s user=%s app=%s addr=%s state=%s\n", $1, $2, $3, $4, $5}'
-    if [ "$ACTIVE_COUNT" -gt 3 ]; then
-        echo "      • ... and $((ACTIVE_COUNT - 3)) more"
-    fi
+echo -e "${BLUE}${BOLD}=== Dump Plan ===${NC}"
+echo -e "  ${CYAN}Database:${NC}    $DB  (${DB_SIZE:-size unknown pre-connect})"
+if [ -n "$FROM_URI" ]; then
+    echo -e "  ${CYAN}Source:${NC}       $SOURCE_DESC"
 else
-    echo -e "  ${CYAN}Active conns:${NC} 0"
+    echo -e "  ${CYAN}Source node:${NC} $NODE"
 fi
+echo -e "  ${CYAN}Jobs:${NC}        $JOBS  (pg_dump -Fd parallel)"
+echo -e "  ${CYAN}Destination:${NC} $FINAL_PATH"
 echo ""
 
-# --- Start / Cancel confirmation ----------------------------------------------
 if [ "$ASSUME_YES" = false ]; then
     echo -ne "${BOLD}Action — [${GREEN}s${NC}${BOLD}]tart  [${RED}c${NC}${BOLD}]ancel: ${NC}"
     read -r confirm
@@ -216,56 +188,58 @@ if [ "$ASSUME_YES" = false ]; then
     esac
 fi
 
-cleanup() {
-    docker exec "$NODE" rm -rf "$CONTAINER_DUMP_DIR" "$CONTAINER_TGZ" 2>/dev/null || true
-}
-trap cleanup EXIT
-
 START_TS=$(date +%s)
 
-echo -e "${YELLOW}[1/3] Running pg_dump (directory format, -j ${JOBS})...${NC}"
-docker exec "$NODE" pg_dump \
-    -U postgres -d "$DB" -p "$INTERNAL_PORT" -h localhost \
-    -Fd -j "$JOBS" -f "$CONTAINER_DUMP_DIR"
-echo -e "${GREEN}✓ pg_dump complete${NC}"
-
-echo -e "${YELLOW}[2/3] Packaging into .tgz inside container...${NC}"
-docker exec "$NODE" tar -czf "$CONTAINER_TGZ" -C /tmp "$DUMP_NAME"
-echo -e "${GREEN}✓ Packaged${NC}"
-
-echo -e "${YELLOW}[3/4] Copying to host staging...${NC}"
-docker cp "$NODE:$CONTAINER_TGZ" "$HOST_TGZ"
-echo -e "${GREEN}✓ Copied${NC}"
-
-if [ "$TARGET_TYPE" = "remote" ]; then
-    echo -e "${YELLOW}[4/4] Transferring to remote (${REMOTE_DEST})...${NC}"
-    RHOST="${REMOTE_DEST%%:*}"
-    RPATH="${REMOTE_DEST#*:}"
-    RDIR="${RPATH%/*}"
-    ssh -o BatchMode=yes "$RHOST" "mkdir -p '$RDIR'" 2>/dev/null || \
-        echo -e "${YELLOW}⚠ could not pre-create remote dir (continuing)${NC}" >&2
-    if scp -q "$HOST_TGZ" "$REMOTE_DEST"; then
-        echo -e "${GREEN}✓ Remote copy complete${NC}"
-    else
-        echo -e "${RED}✗ scp failed — dump remains locally at: $HOST_TGZ${NC}" >&2
-        exit 1
-    fi
+if [ -n "$FROM_URI" ]; then
+    # ── REMOTE: ephemeral client container writes the directory dump ──
+    echo -e "${YELLOW}[1/3] pg_dump via ephemeral client container...${NC}"
+    OUTDIR_ABS=$(cd "$OUTPUT_DIR" && pwd)
+    DUMP_SUB="$DUMP_NAME.dir"
+    rm -rf "$OUTDIR_ABS/$DUMP_SUB"
+    mkdir -p "$OUTDIR_ABS/$DUMP_SUB"
+    timeout 3600 podman run --rm --network=host \
+        -v "$OUTDIR_ABS:/out" \
+        docker.io/library/postgres:${POSTGRES_VERSION:-18}-alpine \
+        pg_dump --dbname="$FROM_URI" -Fd -j "$JOBS" -f "/out/$DUMP_SUB"
+    ok_dir="$OUTDIR_ABS/$DUMP_SUB"
 else
-    echo -e "${YELLOW}[4/4] Done${NC}"
+    # ── LOCAL CLUSTER: dump inside the node container ──
+    CONTAINER_DUMP_DIR="/tmp/${DUMP_NAME}.dir"
+    CONTAINER_TGZ="/tmp/${DUMP_NAME}.tgz"
+    echo -e "${YELLOW}[1/3] Running pg_dump on $NODE (-Fd -j ${JOBS})...${NC}"
+    docker exec "$NODE" pg_dump \
+        -U postgres -d "$DB" -p "$INTERNAL_PORT" -h localhost \
+        -Fd -j "$JOBS" -f "$CONTAINER_DUMP_DIR"
+    echo -e "${GREEN}✓ pg_dump complete${NC}"
+    echo -e "${YELLOW}[2/3] Packaging inside container...${NC}"
+    docker exec "$NODE" tar -czf "$CONTAINER_TGZ" -C /tmp "${DUMP_NAME}.dir"
+    docker exec "$NODE" mv "/tmp/${DUMP_NAME}.dir" "/tmp/${DUMP_NAME}" 2>/dev/null || true
+    CONTAINER_DUMP_DIR="/tmp/${DUMP_NAME}"
+    echo -e "${GREEN}✓ Packaged${NC}"
 fi
 
-DURATION=$(($(date +%s) - START_TS))
-SIZE=$(du -h "$HOST_TGZ" 2>/dev/null | awk '{print $1}')
+# ── Package (host side) ──────────────────────────────────────────────────
+if [ -n "$FROM_URI" ]; then
+    echo -e "${YELLOW}[2/3] Packaging directory dump...${NC}"
+    tar -czf "$FINAL_PATH" -C "$OUTDIR_ABS" "$DUMP_SUB"
+    rm -rf "$ok_dir"
+    echo -e "${GREEN}✓ Packaged${NC}"
+else
+    echo -e "${YELLOW}[3/3] Copying to host...${NC}"
+    docker cp "$NODE:$CONTAINER_TGZ" "$FINAL_PATH"
+    docker exec "$NODE" rm -rf "$CONTAINER_TGZ" "$CONTAINER_DUMP_DIR" 2>/dev/null || true
+    echo -e "${GREEN}✓ Copied${NC}"
+fi
+
+DURATION=$(( $(date +%s) - START_TS ))
+SIZE=$(du -h "$FINAL_PATH" 2>/dev/null | awk '{print $1}')
 
 echo ""
 echo -e "${BLUE}${BOLD}=== Backup Complete ===${NC}"
-echo -e "  ${CYAN}Local file:${NC} $HOST_TGZ"
-[ "$TARGET_TYPE" = "remote" ] && echo -e "  ${CYAN}Remote copy:${NC} $REMOTE_DEST"
+echo -e "  ${CYAN}File:${NC}     $FINAL_PATH"
 echo -e "  ${CYAN}Size:${NC}     ${SIZE:-?}"
 echo -e "  ${CYAN}Duration:${NC} ${DURATION}s"
-echo -e "  ${CYAN}Source:${NC}   $NODE (replica)"
-echo ""
-echo -e "${CYAN}Restore example:${NC}"
-echo -e "  tar -xzf '$HOST_TGZ' -C /tmp"
-echo -e "  pg_restore -h localhost -p \${HAPROXY_WRITE_PORT:-5551} -U postgres \\"
-echo -e "      -d <target_db> -j $JOBS '/tmp/${DUMP_NAME}'"
+if [ -z "$FROM_URI" ]; then
+    echo -e "  ${CYAN}Restore:${NC}"
+    echo -e "    make restore-db ARCHIVE='$FINAL_PATH'"
+fi
