@@ -104,10 +104,11 @@ if [ -z "$FROM_URI" ]; then
     if [ "$INTERACTIVE" = true ] || [ -z "$DB" ]; then
         INTERNAL_PORT=5431
         if [ -z "$NODE" ]; then
-            NODE=$(timeout 10 podman exec db1 patronictl -c /etc/patroni/patroni.yml list 2>/dev/null \
-                | awk '$4=="Replica" && $6=="streaming"{print $2}' | head -1)
-            NODE=${NODE:-$(timeout 10 podman exec db1 patronictl -c /etc/patroni/patroni.yml list 2>/dev/null \
-                | awk '$4=="Leader"{print $2}' | head -1)}
+            LIST=$(timeout 10 podman exec db1 patronictl -c /etc/patroni/patroni.yml list 2>/dev/null || true)
+            # prefer a streaming replica; fall back to the leader
+            NODE=$(printf '%s\n' "$LIST" | awk -F'|' '/Replica/ && /streaming/ {gsub(/ /,"",$2); print $2; exit}')
+            NODE=${NODE:-$(printf '%s\n' "$LIST" | awk -F'|' '/Leader/ {gsub(/ /,"",$2); print $2; exit}')}
+            [ -n "$NODE" ] || { echo -e "${RED}✗ no healthy node found${NC}" >&2; exit 1; }
         fi
         [ -n "$NODE" ] || { echo -e "${RED}✗ no healthy node found${NC}" >&2; exit 1; }
 
