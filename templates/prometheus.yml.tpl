@@ -24,6 +24,13 @@ __PATRONI_TARGETS__
     static_configs:
       - targets:
 __POSTGRES_EXPORTER_TARGETS__
+    metric_relabel_configs:
+      # unify instance identity with the patroni job so dashboards can
+      # switch between exporter and patroni metrics for the same node
+      - source_labels: [instance]
+        regex: postgres-exporter-(db[0-9]+):9187
+        target_label: instance
+        replacement: ${1}:8001
 
   - job_name: haproxy
     static_configs:

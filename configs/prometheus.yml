@@ -34,6 +34,13 @@ scrape_configs:
         - "postgres-exporter-db1:9187"
         - "postgres-exporter-db2:9187"
         - "postgres-exporter-db3:9187"
+    metric_relabel_configs:
+      # unify instance identity with the patroni job so dashboards can
+      # switch between exporter and patroni metrics for the same node
+      - source_labels: [instance]
+        regex: postgres-exporter-(db[0-9]+):9187
+        target_label: instance
+        replacement: ${1}:8001
 
   - job_name: haproxy
     static_configs:
