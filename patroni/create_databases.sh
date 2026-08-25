@@ -27,3 +27,6 @@ else
     echo "Warning: Failed to create or verify database '$DEFAULT_DATABASE'"
     exit 1
 fi
+
+# Metrics: statement tracking for postgres_exporter
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;

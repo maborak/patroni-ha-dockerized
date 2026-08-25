@@ -53,7 +53,7 @@ groups:
   - name: host-resources
     rules:
       - alert: HostDiskAlmostFull
-        expr: node_filesystem_avail_bytes{mountpoint="/host",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{mountpoint="/host",fstype!~"tmpfs|overlay"} < 0.15
+        expr: node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"} < 0.15
         for: 5m
         labels: {severity: critical}
         annotations:

@@ -74,7 +74,7 @@ def write(d):
     print("wrote", os.path.basename(path), "| panels:", len(d["panels"]))
 
 # ═══════════════ shared expressions ═══════════════
-LAG_B   = 'max(patroni_xlog_location) - on(instance) (patroni_xlog_replayed_location + 0 * patroni_xlog_location)'
+LAG_B   = 'max by (instance)(patroni_xlog_location) - on(instance) (patroni_xlog_replayed_location + 0 * patroni_xlog_location)'
 ARCH_ST = 'max(pg_archiver_since_last_archived_seconds)'
 
 # ─────────────────────────────────────────────
@@ -96,7 +96,7 @@ P = [
     stat("Conn saturation", 'max(pg_activity_connections) / max(pg_activity_max_connections)',
          0, 20, 4, 4, unit="percentunit",
          thresholds=[("green"), ("orange", 0.7), ("red", 0.85)]),
-    stat("Host disk free %", 'min(node_filesystem_avail_bytes{mountpoint="/host",fstype=~"xfs|ext4"}) / min(node_filesystem_size_bytes{mountpoint="/host",fstype=~"xfs|ext4"})',
+    stat("Host disk free %", 'min(node_filesystem_avail_bytes{fstype=~"xfs|ext4"}) / min(node_filesystem_size_bytes{fstype=~"xfs|ext4"})',
          4, 0, 4, 4, unit="percentunit",
          thresholds=[("red"), ("orange", 0.15), ("green", 0.25)]),
     stat("Firing alerts", 'count(ALERTS{alertstate="firing"} == 1) or vector(0)', 4, 4, 4, 4,
@@ -253,6 +253,10 @@ write(dash("patroni-queries", "05", "Queries — pg_stat_statements",
 # ─────────────────────────────────────────────
 V = 'pg_vacuum_hotspots_'
 P = [
+    {"type":"text","title":"","gridPos":{"h":2,"w":24,"x":0,"y":0},
+     "options":{"content":"**Populates automatically as application tables are created and queried.** "
+       + "On a fresh bootstrap this page is empty by design — `pg_stat_user_tables` has no rows yet."},
+     "datasource":DS},
     stat("Autovac workers running", 'max(pg_transactions_autovacuum_workers_running)', 0, 0, 4, 4),
     stat("Tables tracked", 'count(pg_vacuum_hotspots_dead_ratio_pct)', 0, 4, 4, 4),
     stat("Worst dead-ratio %", 'max(pg_vacuum_hotspots_dead_ratio_pct)', 0, 8, 4, 4, unit="percent",
@@ -288,7 +292,7 @@ P = [
     ts("Checkpoint timing pressure", [
         ('rate(pg_checkpoints_requested[5m]) / clamp_min(rate(pg_checkpoints_timed[5m]) + rate(pg_checkpoints_requested[5m]), 0.001)', 'requested {{instance}}')], 12, 0, 12, 6, unit="percentunit"),
     ts("max_wal_size headroom", [
-        ('pg_wal_size_bytes / pg_settings_max_wal_size_bytes', '{{instance}}')], 12, 12, 6, 6, unit="percentunit"),
+        ('pg_wal_size_bytes / on(instance) pg_settings_max_wal_size_bytes', '{{instance}}')], 12, 12, 6, 6, unit="percentunit"),
 ]
 write(dash("patroni-wal-backup", "07", "WAL, Archiving & Backups",
            "Write-ahead log pressure, archive pipeline and slot retention.",
@@ -305,7 +309,7 @@ P = [
         ('node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes', 'used'),
         ('node_memory_MemAvailable_bytes', 'available')], 0, 8, 8, 6, unit="bytes"),
     ts("Filesystem free bytes", [
-        ('node_filesystem_avail_bytes{mountpoint="/host",fstype=~"xfs|ext4"}', '{{device}} {{mountpoint}}')],
+        ('node_filesystem_avail_bytes{fstype=~"xfs|ext4"}', '{{device}} {{mountpoint}}')],
         0, 16, 8, 6, unit="bytes"),
     ts("Disk I/O utilization", [
         ('rate(node_disk_io_time_seconds_total{device!~"loop.*|ram.*"}[$__rate_interval])', 'io time/s {{device}}')],
