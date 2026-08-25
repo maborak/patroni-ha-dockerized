@@ -101,17 +101,16 @@ fi
 
 if [ -z "$FROM_URI" ]; then
     # ---- LOCAL CLUSTER SOURCE -------------------------------------------
-    if [ "$INTERACTIVE" = true ] || [ -z "$DB" ]; then
-        INTERNAL_PORT=5431
-        if [ -z "$NODE" ]; then
-            LIST=$(timeout 10 podman exec db1 patronictl -c /etc/patroni/patroni.yml list 2>/dev/null || true)
-            # prefer a streaming replica; fall back to the leader
-            NODE=$(printf '%s\n' "$LIST" | awk -F'|' '/Replica/ && /streaming/ {gsub(/ /,"",$2); print $2; exit}')
-            NODE=${NODE:-$(printf '%s\n' "$LIST" | awk -F'|' '/Leader/ {gsub(/ /,"",$2); print $2; exit}')}
-            [ -n "$NODE" ] || { echo -e "${RED}✗ no healthy node found${NC}" >&2; exit 1; }
-        fi
+    INTERNAL_PORT=5431
+    if [ -z "$NODE" ]; then
+        LIST=$(timeout 10 docker exec db1 patronictl -c /etc/patroni/patroni.yml list 2>/dev/null || true)
+        # prefer a streaming replica; fall back to the leader
+        NODE=$(printf '%s\n' "$LIST" | awk -F'|' '/Replica/ && /streaming/ {gsub(/ /,"",$2); print $2; exit}')
+        NODE=${NODE:-$(printf '%s\n' "$LIST" | awk -F'|' '/Leader/ {gsub(/ /,"",$2); print $2; exit}')}
         [ -n "$NODE" ] || { echo -e "${RED}✗ no healthy node found${NC}" >&2; exit 1; }
+    fi
 
+    if [ "$INTERACTIVE" = true ] || [ -z "$DB" ]; then
         DBS_RAW=$(docker exec "$NODE" psql -U postgres -d postgres -p "$INTERNAL_PORT" -h localhost -t -A -c \
             "SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate ORDER BY 1;" 2>/dev/null)
         [ -n "$DBS_RAW" ] || { echo -e "${RED}✗ cannot list databases on $NODE${NC}" >&2; exit 1; }
@@ -198,7 +197,7 @@ if [ -n "$FROM_URI" ]; then
     DUMP_SUB="$DUMP_NAME.dir"
     rm -rf "$OUTDIR_ABS/$DUMP_SUB"
     mkdir -p "$OUTDIR_ABS/$DUMP_SUB"
-    timeout 3600 podman run --rm --network=host \
+    timeout 3600 docker run --rm --network=host \
         -v "$OUTDIR_ABS:/out" \
         docker.io/library/postgres:${POSTGRES_VERSION:-18}-alpine \
         pg_dump --dbname="$FROM_URI" -Fd -j "$JOBS" -f "/out/$DUMP_SUB"

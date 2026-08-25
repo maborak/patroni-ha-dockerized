@@ -71,13 +71,13 @@ while [ $# -gt 0 ]; do
 done
 
 # ── Node inventory (leader first) ──
-NODES=($(podman ps --format '{{.Names}}' | grep -E '^db[0-9]+$' | sort))
+NODES=($(docker ps --format '{{.Names}}' | grep -E '^db[0-9]+$' | sort))
 [ ${#NODES[@]} -ge 1 ] || die "No running db nodes found"
 
 current_leader() {
     local n out
     for n in "${NODES[@]}"; do
-        out=$(timeout 8 podman exec "$n" patronictl -c /etc/patroni/patroni.yml list 2>/dev/null \
+        out=$(timeout 8 docker exec "$n" patronictl -c /etc/patroni/patroni.yml list 2>/dev/null \
             | grep -E '\|[[:space:]]*[^|]*Leader' | head -1 | awk -F'|' '{gsub(/[[:space:]]/,"",$2); print $2}')
         [ -n "$out" ] && { echo "$out"; return 0; }
     done
@@ -88,7 +88,7 @@ current_leader() {
 if [ -z "$SERVER" ]; then
     msg "${CYAN}Stanzas / available backups:${NC}"
     for n in "${NODES[@]}"; do
-        cnt=$(timeout 20 podman exec -u backup backup sh -c \
+        cnt=$(timeout 20 docker exec -u backup backup sh -c \
             "pgbackrest --stanza=$n --output=json info 2>/dev/null" \
             | python3 -c 'import json,sys;d=json.load(sys.stdin);print(len(d[0].get("backup",[])))' 2>/dev/null || echo 0)
         msg "  $n  (${cnt} backup(s))"
@@ -103,7 +103,7 @@ case " ${NODES[*]} " in *" $SERVER "*) ;; *) die "$SERVER is not a running node"
 # ── Resolve backup id ──
 list_backups() {
     local json
-    json=$(timeout 30 podman exec -u backup backup sh -c \
+    json=$(timeout 30 docker exec -u backup backup sh -c \
         "pgbackrest --stanza=$1 --output=json info" 2>/dev/null) || return 0
     [ -n "$json" ] || return 0
     printf '%s' "$json" | python3 -c '
@@ -140,7 +140,7 @@ if [ -z "$BACKUP_ID" ]; then
 fi
 
 # Validate label exists
-timeout 20 podman exec -u backup backup sh -c "pgbackrest --stanza=$SERVER info" 2>/dev/null \
+timeout 20 docker exec -u backup backup sh -c "pgbackrest --stanza=$SERVER info" 2>/dev/null \
     | grep -q "$BACKUP_ID" || die "Backup $BACKUP_ID not found in stanza $SERVER"
 
 TARGET_NODE="${TARGET_NODE:-$SERVER}"
@@ -169,7 +169,7 @@ case "$TARGET_TYPE" in
 esac
 
 LEADER_NOW="$(current_leader || true)"
-DATA_DIR=$(timeout 10 podman exec "$TARGET_NODE" \
+DATA_DIR=$(timeout 10 docker exec "$TARGET_NODE" \
     sed -n "/^\[$SERVER\]/,/^\[/p" /etc/pgbackrest/pgbackrest.conf 2>/dev/null \
     | grep '^pg1-path' | head -1 | awk '{print $2}')
 DATA_DIR="${DATA_DIR:-/var/lib/postgresql/18/maborak}"
@@ -190,30 +190,30 @@ msg ""
 
 if [ "$DRY_RUN" = 1 ]; then
     msg "${CYAN}Dry run — would execute:${NC}"
-    msg "  podman exec $TARGET_NODE supervisorctl stop patroni"
-    msg "  podman exec $TARGET_NODE mv $DATA_DIR ${DATA_DIR}.pre-pitr.\$(date +%s)"
-    msg "  podman exec -u postgres $TARGET_NODE pgbackrest --stanza=$SERVER \\"
+    msg "  docker exec $TARGET_NODE supervisorctl stop patroni"
+    msg "  docker exec $TARGET_NODE mv $DATA_DIR ${DATA_DIR}.pre-pitr.\$(date +%s)"
+    msg "  docker exec -u postgres $TARGET_NODE pgbackrest --stanza=$SERVER \\"
     msg "      ${TARGET_ARGS[*]} restore"
-    msg "  podman exec $TARGET_NODE supervisorctl start patroni"
+    msg "  docker exec $TARGET_NODE supervisorctl start patroni"
     exit 0
 fi
 
 # ── Execute ──
 msg "${CYAN}[1/5] Stopping Patroni on $TARGET_NODE${NC}"
-podman exec "$TARGET_NODE" supervisorctl stop patroni >/dev/null 2>&1 \
+docker exec "$TARGET_NODE" supervisorctl stop patroni >/dev/null 2>&1 \
     && ok "Patroni stopped" || warn "Patroni already stopped"
 sleep 3
 
 msg "${CYAN}[2/5] Preserving current data directory${NC}"
 STAMP=$(date +%Y%m%dT%H%M%S)
-timeout 60 podman exec "$TARGET_NODE" sh -c \
+timeout 60 docker exec "$TARGET_NODE" sh -c \
     "mv $DATA_DIR ${DATA_DIR}.pre-pitr.$STAMP && mkdir -p $DATA_DIR && chmod 700 $DATA_DIR && chown postgres:postgres $DATA_DIR" \
     && ok "Old data moved to ${DATA_DIR}.pre-pitr.$STAMP" \
     || die "could not relocate $DATA_DIR"
 
 msg "${CYAN}[3/5] Running pgBackRest restore${NC}"
 RESTORE_ARGS_Q=$(printf '%q ' "${TARGET_ARGS[@]}")
-if podman exec -u postgres "$TARGET_NODE" sh -c \
+if docker exec -u postgres "$TARGET_NODE" sh -c \
     "pgbackrest --stanza=$SERVER --log-level-console=info $RESTORE_ARGS_Q restore" \
     > /dev/null 2>&1;
 then
@@ -223,13 +223,13 @@ else
 fi
 
 msg "${CYAN}[4/5] Starting Patroni${NC}"
-podman exec "$TARGET_NODE" supervisorctl start patroni >/dev/null 2>&1 \
+docker exec "$TARGET_NODE" supervisorctl start patroni >/dev/null 2>&1 \
     && ok "Patroni started" || die "failed to start Patroni"
 
 msg "${CYAN}[5/5] Waiting for replay to reach target (max ${RECOVERY_TIMEOUT}s)${NC}"
 ELAPSED=0
 while [ $ELAPSED -lt $RECOVERY_TIMEOUT ]; do
-    STATE=$(timeout 8 podman exec "$TARGET_NODE" psql -U postgres -h 127.0.0.1 -p 5431 -tAc \
+    STATE=$(timeout 8 docker exec "$TARGET_NODE" psql -U postgres -h 127.0.0.1 -p 5431 -tAc \
         "select case when pg_is_in_recovery() then 'recovery:'||coalesce(pg_last_wal_replay_lsn()::text,'?') else 'promoted' end" 2>/dev/null || echo "starting")
     msg "  [$ELAPSED s] $STATE"
     [ "$STATE" = "promoted" ] && break
@@ -239,7 +239,7 @@ done
 if [ "$STATE" = "promoted" ]; then
     ok "PITR complete: $TARGET_NODE recovered to the requested target and promoted"
 else
-    warn "Target not confirmed within ${RECOVERY_TIMEOUT}s (last state: $STATE). Check: podman logs $TARGET_NODE / patronictl list"
+    warn "Target not confirmed within ${RECOVERY_TIMEOUT}s (last state: $STATE). Check: docker logs $TARGET_NODE / patronictl list"
 fi
 
 msg ""

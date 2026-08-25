@@ -65,24 +65,24 @@ VERIFY_PASSED=0
 cleanup() {
     # always resume repo writers, even on failure paths
     if [ "$CRONS_STOPPED" = 1 ]; then
-        podman exec -u root backup supervisorctl start pgbackrest-cron pgbackrest-full-weekly >/dev/null 2>&1 || true
+        docker exec -u root backup supervisorctl start pgbackrest-cron pgbackrest-full-weekly >/dev/null 2>&1 || true
         CRONS_STOPPED=0
     fi
     if [ "$KEEP" != "1" ] && [ "$VERIFY_PASSED" = 1 ]; then
-        podman rm -f -t 20 "$VERIFY_NAME" >/dev/null 2>&1 || true
-        podman rm -f -t 10 "$COPY_NAME" >/dev/null 2>&1 || true
-        podman volume rm "$REPO_VOLUME_VERIFY" >/dev/null 2>&1 || true
+        docker rm -f "$VERIFY_NAME" >/dev/null 2>&1 || true
+        docker rm -f "$COPY_NAME" >/dev/null 2>&1 || true
+        docker volume rm "$REPO_VOLUME_VERIFY" >/dev/null 2>&1 || true
     else
         warn "kept verifier container ($VERIFY_NAME) and repo snapshot ($REPO_VOLUME_VERIFY)"
     fi
 }
 trap cleanup EXIT
 
-podman image exists "$DB_IMAGE" || die "image $DB_IMAGE not found — build the db services first"
+docker image inspect "$DB_IMAGE" >/dev/null 2>&1 || die "image $DB_IMAGE not found — build the db services first"
 
 # ── Resolve label ──
 msg "${CYAN}Resolving backup for stanza $SERVER ($BACKUP_ID)...${NC}"
-INFO_TXT=$(timeout 30 podman exec -u backup backup sh -c \
+INFO_TXT=$(timeout 30 docker exec -u backup backup sh -c \
     "pgbackrest --stanza=$SERVER info" 2>/dev/null) || die "cannot reach repo host 'backup'"
 echo "$INFO_TXT" | grep -qE '^stanza' || die "no stanza $SERVER on repo host"
 
@@ -100,29 +100,29 @@ msg "  Verifying label: ${CYAN}$LABEL${NC}"
 msg "${CYAN}Snapshotting repo volume (private copy)...${NC}"
 # Quiesce repo writers so the snapshot is consistent
 CRONS_STOPPED=0
-if podman exec -u root backup supervisorctl status pgbackrest-cron >/dev/null 2>&1; then
-    podman exec -u root backup supervisorctl stop pgbackrest-cron pgbackrest-full-weekly >/dev/null 2>&1 && CRONS_STOPPED=1 && ok "repo writers paused"
+if docker exec -u root backup supervisorctl status pgbackrest-cron >/dev/null 2>&1; then
+    docker exec -u root backup supervisorctl stop pgbackrest-cron pgbackrest-full-weekly >/dev/null 2>&1 && CRONS_STOPPED=1 && ok "repo writers paused"
 fi
 trap cleanup EXIT
-podman volume create "$REPO_VOLUME_VERIFY" >/dev/null
-timeout 600 podman run --rm --name "$COPY_NAME" \
+docker volume create "$REPO_VOLUME_VERIFY" >/dev/null
+timeout 600 docker run --rm --name "$COPY_NAME" \
     -v "${REPO_VOLUME_SRC}:/src:ro" -v "${REPO_VOLUME_VERIFY}:/dst" \
     alpine sh -c 'cp -a /src/. /dst/'
-[ "$CRONS_STOPPED" = 1 ] && { podman exec -u root backup supervisorctl start pgbackrest-cron pgbackrest-full-weekly >/dev/null 2>&1 && CRONS_STOPPED=0 && ok "repo writers resumed"; }
+[ "$CRONS_STOPPED" = 1 ] && { docker exec -u root backup supervisorctl start pgbackrest-cron pgbackrest-full-weekly >/dev/null 2>&1 && CRONS_STOPPED=0 && ok "repo writers resumed"; }
 ok "Repo snapshot ready"
 # sanity: the snapshot must contain at least one stanza dir
-timeout 10 podman run --rm -v "${REPO_VOLUME_VERIFY}:/r" alpine \
+timeout 10 docker run --rm -v "${REPO_VOLUME_VERIFY}:/r" alpine \
     sh -c 'ls /r/backup/*/backup.info >/dev/null 2>&1' \
     || die "repo snapshot incomplete (no backup.info found)"
 
 # ── Launch verifier ──
 msg "${CYAN}Launching ephemeral verifier (${DB_IMAGE})...${NC}"
-podman run -d --name "$VERIFY_NAME" --hostname "$VERIFY_NAME" \
+docker run -d --name "$VERIFY_NAME" --hostname "$VERIFY_NAME" \
     --network "$NET" \
     -v "${REPO_VOLUME_VERIFY}:/var/lib/pgbackrest" \
     "$DB_IMAGE" sleep infinity >/dev/null
 
-timeout 20 podman exec -e VERIFY_STANZA="$SERVER" "$VERIFY_NAME" sh -c '
+timeout 20 docker exec -e VERIFY_STANZA="$SERVER" "$VERIFY_NAME" sh -c '
 mkdir -p /etc/pgbackrest /var/log/pgbackrest /var/spool/pgbackrest
 cat > /etc/pgbackrest/pgbackrest.conf << EOF
 [global]
@@ -145,7 +145,7 @@ EOF
 # ── Restore ──
 msg "${CYAN}[restore] Restoring '$LABEL' into fresh data dir...${NC}"
 do_restore() {
-timeout 900 podman exec "$VERIFY_NAME" sh -c \
+timeout 900 docker exec "$VERIFY_NAME" sh -c \
     "rm -rf /var/lib/postgresql/restore && mkdir -p /var/lib/postgresql/restore && \
      pgbackrest --stanza=$SERVER --set=$LABEL --type=immediate --target-action=pause \
                 --log-level-console=info restore && \
@@ -159,16 +159,16 @@ fi
 printf '%s\n' "$RESTORE_OUT" | sed 's/^/    /'
 
 PGDATA_V="/var/lib/postgresql/restore"
-timeout 10 podman exec "$VERIFY_NAME" test -f "$PGDATA_V/PG_VERSION" \
+timeout 10 docker exec "$VERIFY_NAME" test -f "$PGDATA_V/PG_VERSION" \
     || die "restore produced no PG_VERSION"
 
-SIZE=$(timeout 10 podman exec "$VERIFY_NAME" du -sh "$PGDATA_V" | cut -f1)
+SIZE=$(timeout 10 docker exec "$VERIFY_NAME" du -sh "$PGDATA_V" | cut -f1)
 ok "Restore complete ($SIZE)"
 
 # ── Normalize config for isolated boot ──
 # Patroni-managed clusters reference absolute paths from the original node
 # (hba_file, certs) and archive targets that don't exist here.
-timeout 20 podman exec -i "$VERIFY_NAME" bash << EOF
+timeout 20 docker exec -i "$VERIFY_NAME" bash << EOF
 set -e
 cat > '$PGDATA_V/pg_hba.conf' << 'HBA'
 local all all trust
@@ -191,15 +191,15 @@ ok "Config normalized for isolated boot"
 
 # ── Boot PostgreSQL (unix socket only — no TCP, no port conflicts) ──
 msg "${CYAN}[boot] Starting PostgreSQL from the restored data...${NC}"
-timeout 90 podman exec -u postgres "$VERIFY_NAME" sh -c \
+timeout 90 docker exec -u postgres "$VERIFY_NAME" sh -c \
     "/usr/lib/postgresql/${POSTGRES_VERSION}/bin/pg_ctl -D '$PGDATA_V' \
      -o '-p 5544 -k /tmp -c listen_addresses=\"\" -c fsync=off -c synchronous_commit=off -c full_page_writes=off' \
      -l /tmp/pg.log -w -t 60 start" \
-    || { timeout 10 podman exec "$VERIFY_NAME" tail -25 "$PGDATA_V/log/"* 2>/dev/null || timeout 10 podman exec "$VERIFY_NAME" cat /tmp/pg.log 2>/dev/null; \
+    || { timeout 10 docker exec "$VERIFY_NAME" tail -25 "$PGDATA_V/log/"* 2>/dev/null || timeout 10 docker exec "$VERIFY_NAME" cat /tmp/pg.log 2>/dev/null; \
          die "restored cluster refused to start"; }
 ok "PostgreSQL accepting connections on restored data"
 
-psql_v() { timeout 15 podman exec -u postgres "$VERIFY_NAME" psql -h /tmp -p 5544 -U postgres -d "${2:-$DEFAULT_DATABASE}" -tAc "$1" 2>&1; }
+psql_v() { timeout 15 docker exec -u postgres "$VERIFY_NAME" psql -h /tmp -p 5544 -U postgres -d "${2:-$DEFAULT_DATABASE}" -tAc "$1" 2>&1; }
 
 FAIL=0
 
@@ -219,10 +219,10 @@ case "$TB" in ''|*[!0-9]*) TB=0;; esac
 
 if [ "$DEEP" = 1 ]; then
     msg "${CYAN}[check 4 --deep] schema hash vs live node${NC}"
-    LIVE=$(podman ps --format '{{.Names}}' | grep -E '^db[0-9]+$' | head -1)
-    H1=$(timeout 30 podman exec -u postgres "$VERIFY_NAME" sh -c \
+    LIVE=$(docker ps --format '{{.Names}}' | grep -E '^db[0-9]+$' | head -1)
+    H1=$(timeout 30 docker exec -u postgres "$VERIFY_NAME" sh -c \
         "pg_dump -h /tmp -p 5544 -U postgres -s '$DEFAULT_DATABASE' | sha256sum" | cut -d' ' -f1)
-    H2=$(timeout 30 podman exec "$LIVE" sh -c \
+    H2=$(timeout 30 docker exec "$LIVE" sh -c \
         "su postgres -c \"pg_dump -p 5431 -U postgres -s '$DEFAULT_DATABASE'\" | sha256sum" | cut -d' ' -f1)
     if [ "$H1" = "$H2" ] && [ -n "$H1" ]; then
         ok "schema hash matches live node ($H1)"
