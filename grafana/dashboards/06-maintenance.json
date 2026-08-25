@@ -16,7 +16,24 @@
  },
  "panels": [
   {
-   "id": 1059,
+   "type": "text",
+   "title": "",
+   "gridPos": {
+    "h": 2,
+    "w": 24,
+    "x": 0,
+    "y": 0
+   },
+   "options": {
+    "content": "**Populates automatically as application tables are created and queried.** On a fresh bootstrap this page is empty by design \u2014 `pg_stat_user_tables` has no rows yet."
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   }
+  },
+  {
+   "id": 1086,
    "title": "Autovac workers running",
    "type": "stat",
    "gridPos": {
@@ -56,7 +73,7 @@
    }
   },
   {
-   "id": 1060,
+   "id": 1087,
    "title": "Tables tracked",
    "type": "stat",
    "gridPos": {
@@ -96,7 +113,7 @@
    }
   },
   {
-   "id": 1061,
+   "id": 1088,
    "title": "Worst dead-ratio %",
    "type": "stat",
    "gridPos": {
@@ -153,7 +170,7 @@
    }
   },
   {
-   "id": 1062,
+   "id": 1089,
    "title": "Max seq scans (total)",
    "type": "stat",
    "gridPos": {
@@ -193,7 +210,7 @@
    }
   },
   {
-   "id": 1063,
+   "id": 1090,
    "title": "Vacuum hotspots",
    "type": "table",
    "gridPos": {
@@ -242,7 +259,7 @@
    }
   },
   {
-   "id": 1064,
+   "id": 1091,
    "title": "Dead tuples \u2014 top tables",
    "type": "timeseries",
    "gridPos": {
@@ -284,7 +301,7 @@
    }
   },
   {
-   "id": 1065,
+   "id": 1092,
    "title": "Sequential scans \u2014 top tables",
    "type": "timeseries",
    "gridPos": {
@@ -326,7 +343,7 @@
    }
   },
   {
-   "id": 1066,
+   "id": 1093,
    "title": "Longest since autovacuum (s)",
    "type": "stat",
    "gridPos": {

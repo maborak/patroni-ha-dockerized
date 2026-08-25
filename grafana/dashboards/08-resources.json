@@ -16,7 +16,7 @@
  },
  "panels": [
   {
-   "id": 1078,
+   "id": 1105,
    "title": "CPU busy %",
    "type": "timeseries",
    "gridPos": {
@@ -63,7 +63,7 @@
    }
   },
   {
-   "id": 1079,
+   "id": 1106,
    "title": "Memory",
    "type": "timeseries",
    "gridPos": {
@@ -110,7 +110,7 @@
    }
   },
   {
-   "id": 1080,
+   "id": 1107,
    "title": "Filesystem free bytes",
    "type": "timeseries",
    "gridPos": {
@@ -125,7 +125,7 @@
    },
    "targets": [
     {
-     "expr": "node_filesystem_avail_bytes{mountpoint=\"/host\",fstype=~\"xfs|ext4\"}",
+     "expr": "node_filesystem_avail_bytes{fstype=~\"xfs|ext4\"}",
      "legendFormat": "{{device}} {{mountpoint}}",
      "refId": "A"
     }
@@ -152,7 +152,7 @@
    }
   },
   {
-   "id": 1081,
+   "id": 1108,
    "title": "Disk I/O utilization",
    "type": "timeseries",
    "gridPos": {
@@ -194,7 +194,7 @@
    }
   },
   {
-   "id": 1082,
+   "id": 1109,
    "title": "Disk throughput",
    "type": "timeseries",
    "gridPos": {
@@ -241,7 +241,7 @@
    }
   },
   {
-   "id": 1083,
+   "id": 1110,
    "title": "Network throughput",
    "type": "timeseries",
    "gridPos": {

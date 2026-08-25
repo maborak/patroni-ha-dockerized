@@ -179,41 +179,123 @@ NODE_TPL = [{
     "refresh": 1, "includeAll": False, "multi": False,
     "current": {"text": "db1:8001", "value": "db1:8001"}}]
 N = 'instance=~"$node"'
+D = 'datname="$db"'
 P = [
-    stat("Connections used", f'pg_activity_connections{{{N}}} / pg_activity_max_connections{{{N}}}',
-         0, 0, 4, 4, unit="percentunit",
-         thresholds=[("green"), ("orange", 0.7), ("red", 0.85)]),
-    stat("Active backends", f'pg_activity_active{{{N}}}', 0, 4, 4, 4),
-    stat("Oldest transaction (s)", f'pg_transactions_longest_tx_seconds{{{N}}}', 0, 8, 4, 4,
-         unit="s", thresholds=[("green"), ("orange", 300), ("red", 900)]),
-    stat("Idle-in-tx count", f'pg_transactions_idle_in_tx_count{{{N}}}', 0, 12, 4, 4,
-         thresholds=[("green"), ("orange", 3), ("red", 10)]),
-    stat("Waiting backends", f'pg_transactions_waiting_backends{{{N}}}', 0, 16, 4, 4,
-         thresholds=[("green"), ("yellow", 2)]),
-    stat("Uptime (s)", f'pg_activity_process_uptime_seconds{{{N}}}', 0, 20, 4, 4, unit="s"),
-    ts("Transactions per second ($db)", [
-        (f'sum(rate(pg_stat_database_xact_commit{{datname="$db", {N}}}[$__rate_interval]))', "commit"),
-        (f'sum(rate(pg_stat_database_xact_rollback{{datname="$db", {N}}}[$__rate_interval]))', "rollback")],
-        4, 0, 8, 7, unit="ops"),
-    ts("Tuple traffic ($db)", [
-        (f'sum(rate(pg_stat_database_tup_inserted{{datname="$db", {N}}}[$__rate_interval]))', "insert"),
-        (f'sum(rate(pg_stat_database_tup_updated{{datname="$db", {N}}}[$__rate_interval]))', "update"),
-        (f'sum(rate(pg_stat_database_tup_deleted{{datname="$db", {N}}}[$__rate_interval]))', "delete")],
-        4, 8, 8, 7, unit="ops"),
-    ts("Blocks hit vs read ($db)", [
-        (f'sum(rate(pg_stat_database_blks_hit{{datname="$db", {N}}}[$__rate_interval]))', "hit"),
-        (f'sum(rate(pg_stat_database_blks_read{{datname="$db", {N}}}[$__rate_interval]))', "read")],
-        4, 16, 8, 7, unit="ops"),
-    ts("Temp files & bytes", [
-        (f'rate(pg_stat_database_temp_files{{datname="$db", {N}}}[$__rate_interval])', "files/s"),
-        (f'rate(pg_stat_database_temp_bytes{{datname="$db", {N}}}[$__rate_interval])', "bytes/s")],
-        11, 0, 8, 6),
-    ts("Deadlocks & conflicts", [
-        (f'increase(pg_stat_database_deadlocks{{datname="$db", {N}}}[1h])', "deadlocks/h"),
-        (f'increase(pg_stat_database_conflicts{{datname="$db", {N}}}[1h])', "conflicts/h")],
-        11, 8, 8, 6),
-    table("Key settings snapshot", f'pg_settings_max_connections{{instance=~"$node"}}', 11, 16, 8, 6),
+    # Row A — header vitals
+    stat("Uptime", f'pg_activity_process_uptime_seconds{{{N}}}', 0, 0, 4, 4, unit="s"),
+    stat("Version major", f'patroni_postgres_server_version{{{N}}} / 10000', 0, 4, 4, 4),
+    stat("Connections used %",
+         f'pg_activity_connections{{{N}}} / pg_activity_max_connections{{{N}}}', 0, 8, 4, 4,
+         unit="percentunit", thresholds=[("green"), ("orange", 0.7), ("red", 0.85)]),
+    stat("Active backends", f'pg_activity_active{{{N}}}', 0, 12, 4, 4),
+    stat("Cache hit % ($db)", 
+         f'rate(pg_stat_database_blks_hit{{datname="$db", {N}}}[$__rate_interval]) / clamp_min(rate(pg_stat_database_blks_hit{{datname="$db", {N}}}[$__rate_interval]) + rate(pg_stat_database_blks_read{{datname="$db", {N}}}[$__rate_interval]), 0.001)',
+         0, 16, 4, 4, unit="percentunit", thresholds=[("red"), ("yellow", 0.9), ("green", 0.97)]),
+    stat("TPS ($db)",
+         f'rate(pg_stat_database_xact_commit{{datname="$db", {N}}}[$__rate_interval])',
+         0, 20, 4, 4, unit="ops"),
 ]
+
+# Row B — Connections deep
+row("Connections & sessions", 5)
+P.append(ts("Connections vs max",
+    [(f'pg_activity_connections{{{N}}}', 'used'),
+     (f'pg_activity_max_connections{{{N}}}', 'max')], 6, 0, 6, 7))
+P.append(ts("Sessions by state",
+    [('sum by (state) (pg_sessions_by_state_sessions{instance=~"$node"})', '{{state}}')], 6, 6, 6, 7, stack=True))
+P.append(ts("Backends by type",
+    [('sum by (backend_type) (pg_backend_types_backends{instance=~"$node"})', '{{backend_type}}')], 6, 12, 6, 7, stack=True))
+P.append(ts("Waiting backends", [
+    (f'pg_transactions_waiting_backends{{{N}}}', 'waiting {{instance}}'),
+    (f'pg_transactions_idle_in_tx_count{{{N}}}', 'idle-in-tx {{instance}}')], 6, 18, 6, 7))
+
+# Row C — Throughput
+row("Throughput", 14)
+P.append(ts("Transactions per second ($db)", [
+    (f'sum(rate(pg_stat_database_xact_commit{{datname="$db", {N}}}[$__rate_interval]))', 'commit'),
+    (f'sum(rate(pg_stat_database_xact_rollback{{datname="$db", {N}}}[$__rate_interval]))', 'rollback')], 15, 0, 8, 7, unit="ops"))
+P.append(ts("Tuple traffic ($db)", [
+    (f'sum(rate(pg_stat_database_tup_inserted{{datname="$db", {N}}}[$__rate_interval]))', 'insert'),
+    (f'sum(rate(pg_stat_database_tup_updated{{datname="$db", {N}}}[$__rate_interval]))', 'update'),
+    (f'sum(rate(pg_stat_database_tup_deleted{{datname="$db", {N}}}[$__rate_interval]))', 'delete')],
+    15, 8, 8, 7, unit="ops"))
+P.append(ts("Rows returned vs fetched ($db)", [
+    (f'rate(pg_stat_database_tup_returned{{datname="$db", {N}}}[$__rate_interval])', 'returned'),
+    (f'rate(pg_stat_database_tup_fetched{{datname="$db", {N}}}[$__rate_interval])', 'fetched')],
+    15, 16, 8, 7, unit="ops"))
+
+# Row D — Cache & temp
+row("Cache & temporary I/O", 23)
+P.append(ts("Blocks hit vs read ($db)", [
+    (f'rate(pg_stat_database_blks_hit{{datname="$db", {N}}}[$__rate_interval])', 'hit'),
+    (f'rate(pg_stat_database_blks_read{{datname="$db", {N}}}[$__rate_interval])', 'read')],
+    24, 0, 8, 6, unit="ops"))
+P.append(ts("Temp bytes/s", [
+    (f'rate(pg_stat_database_temp_bytes{{datname="$db", {N}}}[$__rate_interval]) > 0', '{{instance}}')],
+    24, 8, 8, 6, unit="Bps"))
+P.append(ts("Temp files created/s", [
+    (f'rate(pg_stat_database_temp_files{{datname="$db", {N}}}[$__rate_interval]) > 0', '{{instance}}')],
+    24, 16, 8, 6))
+
+# Row E — WAL & checkpoints (this node)
+row("WAL & checkpoints", 31)
+P.append(ts("WAL bytes/s (this node)", [
+    (f'deriv(pg_wal_stats_bytes{{instance=~"$node"}}[2m])', 'generated B/s')], 32, 0, 6, 6, unit="Bps"))
+P.append(ts("WAL records / FPI per second", [
+    (f'rate(pg_wal_stats_records{{instance=~"$node"}}[2m])', 'records/s'),
+    (f'rate(pg_wal_stats_fpi{{instance=~"$node"}}[2m])', 'FPI/s')],
+    32, 6, 6, 6))
+P.append(ts("Checkpoints timed vs requested", [
+    (f'rate(pg_checkpoints_timed{{instance=~"$node"}}[5m])', 'timed'),
+    (f'rate(pg_checkpoints_requested{{instance=~"$node"}}[5m])', 'requested')],
+    32, 12, 6, 6))
+P.append(stat("Checkpoint requested-ratio",
+    f'rate(pg_checkpoints_requested{{instance=~"$node"}}[5m]) / clamp_min(rate(pg_checkpoints_timed{{instance=~"$node"}}[5m]) + rate(pg_checkpoints_requested{{instance=~"$node"}}[5m]), 0.001)',
+    32, 18, 6, 6, unit="percentunit", thresholds=[("green"), ("yellow", 0.2), ("red", 0.5)]))
+
+# Row F — Health hygiene
+row("Health hygiene", 39)
+P.append(ts("Deadlocks & conflicts per hour ($db)", [
+    (f'increase(pg_stat_database_deadlocks{{datname="$db", {N}}}[1h])', 'deadlocks'),
+    (f'increase(pg_stat_database_conflicts{{datname="$db", {N}}}[1h])', 'conflicts')], 40, 0, 6, 6))
+P.append(ts("Conflict types ($db)", [
+    (f'increase(pg_stat_database_conflicts_confl_tablespace{{datname="$db", {N}}}[1h])', 'tablespace'),
+    (f'increase(pg_stat_database_conflicts_confl_lock{{datname="$db", {N}}}[1h])', 'lock'),
+    (f'increase(pg_stat_database_conflicts_confl_snapshot{{datname="$db", {N}}}[1h])', 'snapshot'),
+    (f'increase(pg_stat_database_conflicts_confl_bufferpin{{datname="$db", {N}}}[1h])', 'bufferpin'),
+    (f'increase(pg_stat_database_conflicts_confl_deadlock{{datname="$db", {N}}}[1h])', 'deadlock')],
+    40, 6, 6, 6))
+P.append(stat("Prepared transactions", f'pg_prepared_prepared_xacts{{{N}}}', 40, 12, 3, 6,
+              thresholds=[("green"), ("yellow", 1)]))
+P.append(stat("Oldest prepared age (s)", f'pg_prepared_oldest_prepared_seconds{{{N}}}',
+              40, 15, 3, 6, unit="s"))
+P.append(ts("Longest transaction age", [
+    (f'pg_transactions_longest_tx_seconds{{{N}}}', 'longest tx (s)'),
+    (f'pg_transactions_longest_idle_in_tx_seconds{{{N}}}', 'longest idle-in-tx (s)')],
+    40, 18, 6, 6, unit="s"))
+
+# Row G — Wraparound safety
+row("Wraparound safety", 47)
+P.append(stat("Max XID age (wraparound horizon)",
+    f'max(pg_wraparound_max_xid_age{{instance=~"$node"}})', 48, 0, 6, 5, unit="short",
+    thresholds=[("green"), ("yellow", 500000000), ("red", 1200000000)]))
+P.append(ts("XID age over time", [
+    (f'max by (instance)(pg_wraparound_max_xid_age{{instance=~"$node"}})', '{{instance}}')],
+    48, 6, 9, 5))
+P.append(ts("Database sizes on this node", [
+    ('pg_database_size_bytes{instance=~"$node"}', '{{datname}}')], 48, 15, 9, 5, unit="bytes"))
+
+# Row H — Storage hotspots
+row("Storage hotspots", 54)
+P.append(table("Top tables by total size",
+    f'topk(12, pg_top_tables_total_size_bytes{{instance=~"$node"}})', 55, 0, 10, 8))
+P.append(table("Seq vs idx scan balance",
+    f'topk(12, pg_top_tables_seq_scan{{instance=~"$node"}} * 0 + pg_top_tables_idx_scan{{instance=~"$node"}})', 55, 10, 7, 8))
+P.append(ts("Live tuples — biggest tables", [
+    (f'topk(5, pg_top_tables_live_tup{{instance=~"$node"}})', '{{rel}}')], 55, 17, 7, 8))
+
+# Settings snapshot
+P.append(table("Settings snapshot", f'pg_settings_max_connections{{instance=~"$node"}}', 63, 0, 8, 6))
 write(dash("patroni-instance", "04", "PostgreSQL Instance",
            "Per-node drill-down. Pick a node with the Node selector.",
            ["postgres"], P, templating=NODE_TPL +

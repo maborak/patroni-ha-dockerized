@@ -17,12 +17,92 @@
  "panels": [
   {
    "id": 1037,
-   "title": "Connections used",
+   "title": "Uptime",
    "type": "stat",
    "gridPos": {
     "h": 4,
     "w": 4,
     "x": 0,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "pg_activity_process_uptime_seconds{instance=~\"$node\"}",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "s"
+     },
+     "overrides": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1038,
+   "title": "Version major",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 4,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "patroni_postgres_server_version{instance=~\"$node\"} / 10000",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "short"
+     },
+     "overrides": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1039,
+   "title": "Connections used %",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 8,
     "y": 0
    },
    "datasource": {
@@ -73,13 +153,13 @@
    }
   },
   {
-   "id": 1038,
+   "id": 1040,
    "title": "Active backends",
    "type": "stat",
    "gridPos": {
     "h": 4,
     "w": 4,
-    "x": 4,
+    "x": 12,
     "y": 0
    },
    "datasource": {
@@ -113,122 +193,8 @@
    }
   },
   {
-   "id": 1039,
-   "title": "Oldest transaction (s)",
-   "type": "stat",
-   "gridPos": {
-    "h": 4,
-    "w": 4,
-    "x": 8,
-    "y": 0
-   },
-   "datasource": {
-    "type": "prometheus",
-    "uid": "prom"
-   },
-   "targets": [
-    {
-     "expr": "pg_transactions_longest_tx_seconds{instance=~\"$node\"}",
-     "instant": true,
-     "refId": "A"
-    }
-   ],
-   "fieldConfig": {
-    "defaults": {
-     "defaults": {
-      "unit": "s"
-     },
-     "overrides": [],
-     "thresholds": {
-      "mode": "absolute",
-      "steps": [
-       {
-        "color": "g",
-        "value": null
-       },
-       {
-        "color": "orange",
-        "value": 300
-       },
-       {
-        "color": "red",
-        "value": 900
-       }
-      ]
-     }
-    },
-    "overrides": []
-   },
-   "options": {
-    "reduceOptions": {
-     "calcs": [
-      "lastNotNull"
-     ]
-    },
-    "colorMode": "value",
-    "textMode": "auto"
-   }
-  },
-  {
-   "id": 1040,
-   "title": "Idle-in-tx count",
-   "type": "stat",
-   "gridPos": {
-    "h": 4,
-    "w": 4,
-    "x": 12,
-    "y": 0
-   },
-   "datasource": {
-    "type": "prometheus",
-    "uid": "prom"
-   },
-   "targets": [
-    {
-     "expr": "pg_transactions_idle_in_tx_count{instance=~\"$node\"}",
-     "instant": true,
-     "refId": "A"
-    }
-   ],
-   "fieldConfig": {
-    "defaults": {
-     "defaults": {
-      "unit": "short"
-     },
-     "overrides": [],
-     "thresholds": {
-      "mode": "absolute",
-      "steps": [
-       {
-        "color": "g",
-        "value": null
-       },
-       {
-        "color": "orange",
-        "value": 3
-       },
-       {
-        "color": "red",
-        "value": 10
-       }
-      ]
-     }
-    },
-    "overrides": []
-   },
-   "options": {
-    "reduceOptions": {
-     "calcs": [
-      "lastNotNull"
-     ]
-    },
-    "colorMode": "value",
-    "textMode": "auto"
-   }
-  },
-  {
    "id": 1041,
-   "title": "Waiting backends",
+   "title": "Cache hit % ($db)",
    "type": "stat",
    "gridPos": {
     "h": 4,
@@ -242,7 +208,7 @@
    },
    "targets": [
     {
-     "expr": "pg_transactions_waiting_backends{instance=~\"$node\"}",
+     "expr": "rate(pg_stat_database_blks_hit{datname=\"$db\", instance=~\"$node\"}[$__rate_interval]) / clamp_min(rate(pg_stat_database_blks_hit{datname=\"$db\", instance=~\"$node\"}[$__rate_interval]) + rate(pg_stat_database_blks_read{datname=\"$db\", instance=~\"$node\"}[$__rate_interval]), 0.001)",
      "instant": true,
      "refId": "A"
     }
@@ -250,19 +216,23 @@
    "fieldConfig": {
     "defaults": {
      "defaults": {
-      "unit": "short"
+      "unit": "percentunit"
      },
      "overrides": [],
      "thresholds": {
       "mode": "absolute",
       "steps": [
        {
-        "color": "g",
+        "color": "r",
         "value": null
        },
        {
         "color": "yellow",
-        "value": 2
+        "value": 0.9
+       },
+       {
+        "color": "green",
+        "value": 0.97
        }
       ]
      }
@@ -281,7 +251,7 @@
   },
   {
    "id": 1042,
-   "title": "Uptime (s)",
+   "title": "TPS ($db)",
    "type": "stat",
    "gridPos": {
     "h": 4,
@@ -295,7 +265,7 @@
    },
    "targets": [
     {
-     "expr": "pg_activity_process_uptime_seconds{instance=~\"$node\"}",
+     "expr": "rate(pg_stat_database_xact_commit{datname=\"$db\", instance=~\"$node\"}[$__rate_interval])",
      "instant": true,
      "refId": "A"
     }
@@ -303,7 +273,7 @@
    "fieldConfig": {
     "defaults": {
      "defaults": {
-      "unit": "s"
+      "unit": "ops"
      },
      "overrides": []
     },
@@ -320,14 +290,198 @@
    }
   },
   {
-   "id": 1043,
+   "id": 1044,
+   "title": "Connections vs max",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 7,
+    "w": 6,
+    "x": 0,
+    "y": 6
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "pg_activity_connections{instance=~\"$node\"}",
+     "legendFormat": "used",
+     "refId": "A"
+    },
+    {
+     "expr": "pg_activity_max_connections{instance=~\"$node\"}",
+     "legendFormat": "max",
+     "refId": "B"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 1045,
+   "title": "Sessions by state",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 7,
+    "w": 6,
+    "x": 6,
+    "y": 6
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "sum by (state) (pg_sessions_by_state_sessions{instance=~\"$node\"})",
+     "legendFormat": "{{state}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1,
+      "stacking": {
+       "mode": "normal"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 1046,
+   "title": "Backends by type",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 7,
+    "w": 6,
+    "x": 12,
+    "y": 6
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "sum by (backend_type) (pg_backend_types_backends{instance=~\"$node\"})",
+     "legendFormat": "{{backend_type}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1,
+      "stacking": {
+       "mode": "normal"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 1047,
+   "title": "Waiting backends",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 7,
+    "w": 6,
+    "x": 18,
+    "y": 6
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "pg_transactions_waiting_backends{instance=~\"$node\"}",
+     "legendFormat": "waiting {{instance}}",
+     "refId": "A"
+    },
+    {
+     "expr": "pg_transactions_idle_in_tx_count{instance=~\"$node\"}",
+     "legendFormat": "idle-in-tx {{instance}}",
+     "refId": "B"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 1049,
    "title": "Transactions per second ($db)",
    "type": "timeseries",
    "gridPos": {
     "h": 7,
     "w": 8,
     "x": 0,
-    "y": 4
+    "y": 15
    },
    "datasource": {
     "type": "prometheus",
@@ -367,14 +521,14 @@
    }
   },
   {
-   "id": 1044,
+   "id": 1050,
    "title": "Tuple traffic ($db)",
    "type": "timeseries",
    "gridPos": {
     "h": 7,
     "w": 8,
     "x": 8,
-    "y": 4
+    "y": 15
    },
    "datasource": {
     "type": "prometheus",
@@ -419,14 +573,14 @@
    }
   },
   {
-   "id": 1045,
-   "title": "Blocks hit vs read ($db)",
+   "id": 1051,
+   "title": "Rows returned vs fetched ($db)",
    "type": "timeseries",
    "gridPos": {
     "h": 7,
     "w": 8,
     "x": 16,
-    "y": 4
+    "y": 15
    },
    "datasource": {
     "type": "prometheus",
@@ -434,12 +588,59 @@
    },
    "targets": [
     {
-     "expr": "sum(rate(pg_stat_database_blks_hit{datname=\"$db\", instance=~\"$node\"}[$__rate_interval]))",
+     "expr": "rate(pg_stat_database_tup_returned{datname=\"$db\", instance=~\"$node\"}[$__rate_interval])",
+     "legendFormat": "returned",
+     "refId": "A"
+    },
+    {
+     "expr": "rate(pg_stat_database_tup_fetched{datname=\"$db\", instance=~\"$node\"}[$__rate_interval])",
+     "legendFormat": "fetched",
+     "refId": "B"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ops",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 1053,
+   "title": "Blocks hit vs read ($db)",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 6,
+    "w": 8,
+    "x": 0,
+    "y": 24
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "rate(pg_stat_database_blks_hit{datname=\"$db\", instance=~\"$node\"}[$__rate_interval])",
      "legendFormat": "hit",
      "refId": "A"
     },
     {
-     "expr": "sum(rate(pg_stat_database_blks_read{datname=\"$db\", instance=~\"$node\"}[$__rate_interval]))",
+     "expr": "rate(pg_stat_database_blks_read{datname=\"$db\", instance=~\"$node\"}[$__rate_interval])",
      "legendFormat": "read",
      "refId": "B"
     }
@@ -466,14 +667,14 @@
    }
   },
   {
-   "id": 1046,
-   "title": "Temp files & bytes",
+   "id": 1054,
+   "title": "Temp bytes/s",
    "type": "timeseries",
    "gridPos": {
     "h": 6,
     "w": 8,
-    "x": 0,
-    "y": 11
+    "x": 8,
+    "y": 24
    },
    "datasource": {
     "type": "prometheus",
@@ -481,13 +682,139 @@
    },
    "targets": [
     {
-     "expr": "rate(pg_stat_database_temp_files{datname=\"$db\", instance=~\"$node\"}[$__rate_interval])",
-     "legendFormat": "files/s",
+     "expr": "rate(pg_stat_database_temp_bytes{datname=\"$db\", instance=~\"$node\"}[$__rate_interval]) > 0",
+     "legendFormat": "{{instance}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "Bps",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 1055,
+   "title": "Temp files created/s",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 6,
+    "w": 8,
+    "x": 16,
+    "y": 24
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "rate(pg_stat_database_temp_files{datname=\"$db\", instance=~\"$node\"}[$__rate_interval]) > 0",
+     "legendFormat": "{{instance}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 1057,
+   "title": "WAL bytes/s (this node)",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 6,
+    "w": 6,
+    "x": 0,
+    "y": 32
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "deriv(pg_wal_stats_bytes{instance=~\"$node\"}[2m])",
+     "legendFormat": "generated B/s",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "Bps",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 1058,
+   "title": "WAL records / FPI per second",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 6,
+    "w": 6,
+    "x": 6,
+    "y": 32
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "rate(pg_wal_stats_records{instance=~\"$node\"}[2m])",
+     "legendFormat": "records/s",
      "refId": "A"
     },
     {
-     "expr": "rate(pg_stat_database_temp_bytes{datname=\"$db\", instance=~\"$node\"}[$__rate_interval])",
-     "legendFormat": "bytes/s",
+     "expr": "rate(pg_wal_stats_fpi{instance=~\"$node\"}[2m])",
+     "legendFormat": "FPI/s",
      "refId": "B"
     }
    ],
@@ -513,14 +840,118 @@
    }
   },
   {
-   "id": 1047,
-   "title": "Deadlocks & conflicts",
+   "id": 1059,
+   "title": "Checkpoints timed vs requested",
    "type": "timeseries",
    "gridPos": {
     "h": 6,
-    "w": 8,
-    "x": 8,
-    "y": 11
+    "w": 6,
+    "x": 12,
+    "y": 32
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "rate(pg_checkpoints_timed{instance=~\"$node\"}[5m])",
+     "legendFormat": "timed",
+     "refId": "A"
+    },
+    {
+     "expr": "rate(pg_checkpoints_requested{instance=~\"$node\"}[5m])",
+     "legendFormat": "requested",
+     "refId": "B"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 1060,
+   "title": "Checkpoint requested-ratio",
+   "type": "stat",
+   "gridPos": {
+    "h": 6,
+    "w": 6,
+    "x": 18,
+    "y": 32
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "rate(pg_checkpoints_requested{instance=~\"$node\"}[5m]) / clamp_min(rate(pg_checkpoints_timed{instance=~\"$node\"}[5m]) + rate(pg_checkpoints_requested{instance=~\"$node\"}[5m]), 0.001)",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "percentunit"
+     },
+     "overrides": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "g",
+        "value": null
+       },
+       {
+        "color": "yellow",
+        "value": 0.2
+       },
+       {
+        "color": "red",
+        "value": 0.5
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1062,
+   "title": "Deadlocks & conflicts per hour ($db)",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 6,
+    "w": 6,
+    "x": 0,
+    "y": 40
    },
    "datasource": {
     "type": "prometheus",
@@ -529,12 +960,12 @@
    "targets": [
     {
      "expr": "increase(pg_stat_database_deadlocks{datname=\"$db\", instance=~\"$node\"}[1h])",
-     "legendFormat": "deadlocks/h",
+     "legendFormat": "deadlocks",
      "refId": "A"
     },
     {
      "expr": "increase(pg_stat_database_conflicts{datname=\"$db\", instance=~\"$node\"}[1h])",
-     "legendFormat": "conflicts/h",
+     "legendFormat": "conflicts",
      "refId": "B"
     }
    ],
@@ -560,14 +991,497 @@
    }
   },
   {
-   "id": 1048,
-   "title": "Key settings snapshot",
+   "id": 1063,
+   "title": "Conflict types ($db)",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 6,
+    "w": 6,
+    "x": 6,
+    "y": 40
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "increase(pg_stat_database_conflicts_confl_tablespace{datname=\"$db\", instance=~\"$node\"}[1h])",
+     "legendFormat": "tablespace",
+     "refId": "A"
+    },
+    {
+     "expr": "increase(pg_stat_database_conflicts_confl_lock{datname=\"$db\", instance=~\"$node\"}[1h])",
+     "legendFormat": "lock",
+     "refId": "B"
+    },
+    {
+     "expr": "increase(pg_stat_database_conflicts_confl_snapshot{datname=\"$db\", instance=~\"$node\"}[1h])",
+     "legendFormat": "snapshot",
+     "refId": "C"
+    },
+    {
+     "expr": "increase(pg_stat_database_conflicts_confl_bufferpin{datname=\"$db\", instance=~\"$node\"}[1h])",
+     "legendFormat": "bufferpin",
+     "refId": "D"
+    },
+    {
+     "expr": "increase(pg_stat_database_conflicts_confl_deadlock{datname=\"$db\", instance=~\"$node\"}[1h])",
+     "legendFormat": "deadlock",
+     "refId": "E"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 1064,
+   "title": "Prepared transactions",
+   "type": "stat",
+   "gridPos": {
+    "h": 6,
+    "w": 3,
+    "x": 12,
+    "y": 40
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "pg_prepared_prepared_xacts{instance=~\"$node\"}",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "short"
+     },
+     "overrides": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "g",
+        "value": null
+       },
+       {
+        "color": "yellow",
+        "value": 1
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1065,
+   "title": "Oldest prepared age (s)",
+   "type": "stat",
+   "gridPos": {
+    "h": 6,
+    "w": 3,
+    "x": 15,
+    "y": 40
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "pg_prepared_oldest_prepared_seconds{instance=~\"$node\"}",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "s"
+     },
+     "overrides": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1066,
+   "title": "Longest transaction age",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 6,
+    "w": 6,
+    "x": 18,
+    "y": 40
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "pg_transactions_longest_tx_seconds{instance=~\"$node\"}",
+     "legendFormat": "longest tx (s)",
+     "refId": "A"
+    },
+    {
+     "expr": "pg_transactions_longest_idle_in_tx_seconds{instance=~\"$node\"}",
+     "legendFormat": "longest idle-in-tx (s)",
+     "refId": "B"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 1068,
+   "title": "Max XID age (wraparound horizon)",
+   "type": "stat",
+   "gridPos": {
+    "h": 5,
+    "w": 6,
+    "x": 0,
+    "y": 48
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "max(pg_wraparound_max_xid_age{instance=~\"$node\"})",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "short"
+     },
+     "overrides": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "g",
+        "value": null
+       },
+       {
+        "color": "yellow",
+        "value": 500000000
+       },
+       {
+        "color": "red",
+        "value": 1200000000
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1069,
+   "title": "XID age over time",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 5,
+    "w": 9,
+    "x": 6,
+    "y": 48
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "max by (instance)(pg_wraparound_max_xid_age{instance=~\"$node\"})",
+     "legendFormat": "{{instance}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 1070,
+   "title": "Database sizes on this node",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 5,
+    "w": 9,
+    "x": 15,
+    "y": 48
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "pg_database_size_bytes{instance=~\"$node\"}",
+     "legendFormat": "{{datname}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 1072,
+   "title": "Top tables by total size",
+   "type": "table",
+   "gridPos": {
+    "h": 8,
+    "w": 10,
+    "x": 0,
+    "y": 55
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "topk(12, pg_top_tables_total_size_bytes{instance=~\"$node\"})",
+     "instant": true,
+     "format": "table",
+     "refId": "A"
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true,
+       "__name__": true,
+       "job": true
+      }
+     }
+    },
+    {
+     "id": "sorting",
+     "options": {
+      "sort": [
+       {
+        "field": "Value #A",
+        "desc": true
+       }
+      ]
+     }
+    }
+   ],
+   "options": {
+    "showHeader": true
+   }
+  },
+  {
+   "id": 1073,
+   "title": "Seq vs idx scan balance",
+   "type": "table",
+   "gridPos": {
+    "h": 8,
+    "w": 7,
+    "x": 10,
+    "y": 55
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "topk(12, pg_top_tables_seq_scan{instance=~\"$node\"} * 0 + pg_top_tables_idx_scan{instance=~\"$node\"})",
+     "instant": true,
+     "format": "table",
+     "refId": "A"
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true,
+       "__name__": true,
+       "job": true
+      }
+     }
+    },
+    {
+     "id": "sorting",
+     "options": {
+      "sort": [
+       {
+        "field": "Value #A",
+        "desc": true
+       }
+      ]
+     }
+    }
+   ],
+   "options": {
+    "showHeader": true
+   }
+  },
+  {
+   "id": 1074,
+   "title": "Live tuples \u2014 biggest tables",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 8,
+    "w": 7,
+    "x": 17,
+    "y": 55
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "topk(5, pg_top_tables_live_tup{instance=~\"$node\"})",
+     "legendFormat": "{{rel}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 1075,
+   "title": "Settings snapshot",
    "type": "table",
    "gridPos": {
     "h": 6,
     "w": 8,
-    "x": 16,
-    "y": 11
+    "x": 0,
+    "y": 63
    },
    "datasource": {
     "type": "prometheus",

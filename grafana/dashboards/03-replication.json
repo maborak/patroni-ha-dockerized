@@ -31,7 +31,7 @@
    },
    "targets": [
     {
-     "expr": "max(patroni_xlog_location) - on(instance) (patroni_xlog_replayed_location + 0 * patroni_xlog_location)",
+     "expr": "max by (instance)(patroni_xlog_location) - on(instance) (patroni_xlog_replayed_location + 0 * patroni_xlog_location)",
      "legendFormat": "{{instance}}",
      "refId": "A"
     }

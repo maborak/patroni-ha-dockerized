@@ -16,7 +16,7 @@
  },
  "panels": [
   {
-   "id": 1084,
+   "id": 1111,
    "title": "Critical firing",
    "type": "stat",
    "gridPos": {
@@ -69,7 +69,7 @@
    }
   },
   {
-   "id": 1085,
+   "id": 1112,
    "title": "Warning firing",
    "type": "stat",
    "gridPos": {
@@ -122,7 +122,7 @@
    }
   },
   {
-   "id": 1086,
+   "id": 1113,
    "title": "All healthy checks",
    "type": "stat",
    "gridPos": {
@@ -162,7 +162,7 @@
    }
   },
   {
-   "id": 1087,
+   "id": 1114,
    "title": "Firing alerts",
    "type": "table",
    "gridPos": {
@@ -211,7 +211,7 @@
    }
   },
   {
-   "id": 1088,
+   "id": 1115,
    "title": "Alerts over time",
    "type": "timeseries",
    "gridPos": {
@@ -253,7 +253,7 @@
    }
   },
   {
-   "id": 1089,
+   "id": 1116,
    "title": "Every rule state (incl. OK)",
    "type": "table",
    "gridPos": {

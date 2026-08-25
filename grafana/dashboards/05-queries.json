@@ -16,7 +16,7 @@
  },
  "panels": [
   {
-   "id": 1049,
+   "id": 1076,
    "title": "Statements tracked",
    "type": "stat",
    "gridPos": {
@@ -56,7 +56,7 @@
    }
   },
   {
-   "id": 1050,
+   "id": 1077,
    "title": "Total exec time (ms/s scrape)",
    "type": "stat",
    "gridPos": {
@@ -96,7 +96,7 @@
    }
   },
   {
-   "id": 1051,
+   "id": 1078,
    "title": "Calls per second",
    "type": "stat",
    "gridPos": {
@@ -136,7 +136,7 @@
    }
   },
   {
-   "id": 1052,
+   "id": 1079,
    "title": "Rows returned per second",
    "type": "stat",
    "gridPos": {
@@ -176,7 +176,7 @@
    }
   },
   {
-   "id": 1053,
+   "id": 1080,
    "title": "Avg cache-hit % (top set)",
    "type": "stat",
    "gridPos": {
@@ -233,7 +233,7 @@
    }
   },
   {
-   "id": 1054,
+   "id": 1081,
    "title": "Top by TOTAL time",
    "type": "table",
    "gridPos": {
@@ -282,7 +282,7 @@
    }
   },
   {
-   "id": 1055,
+   "id": 1082,
    "title": "Top by MEAN time",
    "type": "table",
    "gridPos": {
@@ -331,7 +331,7 @@
    }
   },
   {
-   "id": 1056,
+   "id": 1083,
    "title": "Mean execution time distribution (top 5)",
    "type": "timeseries",
    "gridPos": {
@@ -373,7 +373,7 @@
    }
   },
   {
-   "id": 1057,
+   "id": 1084,
    "title": "Cache miss % (worst 5)",
    "type": "timeseries",
    "gridPos": {
@@ -415,7 +415,7 @@
    }
   },
   {
-   "id": 1058,
+   "id": 1085,
    "title": "Calls rate (top 5)",
    "type": "timeseries",
    "gridPos": {

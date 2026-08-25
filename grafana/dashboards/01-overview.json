@@ -139,7 +139,7 @@
    },
    "targets": [
     {
-     "expr": "max(patroni_xlog_location) - on(instance) (patroni_xlog_replayed_location + 0 * patroni_xlog_location)",
+     "expr": "max by (instance)(patroni_xlog_location) - on(instance) (patroni_xlog_replayed_location + 0 * patroni_xlog_location)",
      "instant": true,
      "refId": "A"
     }
@@ -367,7 +367,7 @@
    },
    "targets": [
     {
-     "expr": "min(node_filesystem_avail_bytes{mountpoint=\"/host\",fstype=~\"xfs|ext4\"}) / min(node_filesystem_size_bytes{mountpoint=\"/host\",fstype=~\"xfs|ext4\"})",
+     "expr": "min(node_filesystem_avail_bytes{fstype=~\"xfs|ext4\"}) / min(node_filesystem_size_bytes{fstype=~\"xfs|ext4\"})",
      "instant": true,
      "refId": "A"
     }
@@ -690,7 +690,7 @@
    },
    "targets": [
     {
-     "expr": "max(patroni_xlog_location) - on(instance) (patroni_xlog_replayed_location + 0 * patroni_xlog_location)",
+     "expr": "max by (instance)(patroni_xlog_location) - on(instance) (patroni_xlog_replayed_location + 0 * patroni_xlog_location)",
      "legendFormat": "{{instance}}",
      "refId": "A"
     }
