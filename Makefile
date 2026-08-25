@@ -143,6 +143,24 @@ status: ## Show cluster status, health, and all access endpoints (HAProxy, PgBou
 	echo "=== HAProxy Stats ==="; \
 	echo "  http://localhost:$${HAPROXY_STATS_PORT:-5553}/stats"; \
 	echo ""; \
+	if [ "$$(grep -E '^ENABLE_MONITORING=1' .env 2>/dev/null)" ]; then \
+		GPASS=$$(grep -E '^GRAFANA_ADMIN_PASSWORD=' .env 2>/dev/null | cut -d= -f2); \
+		MON_UP=""; \
+		for c in prometheus grafana alertmanager; do \
+			podman ps --format '{{.Names}}' 2>/dev/null | grep -qx "$$c" && MON_UP="$$MON_UP $$c"; \
+		done; \
+		echo "=== Monitoring (ENABLE_MONITORING=1) ==="; \
+		echo "$$MON_UP" | grep -qw grafana && ST=up || ST="not running (make monitoring-up)"; \
+		echo "  Grafana:        http://localhost:$${GRAFANA_PORT:-3001}   [admin / $$( [ -n "$$GPASS" ] && echo "$$GPASS" || echo '<unset GRAFANA_ADMIN_PASSWORD>') ] — $${ST}"; \
+		echo "    Dashboard:    PostgreSQL HA — Swiss Knife (auto-provisioned)"; \
+		echo "  Prometheus:     http://localhost:$${PROMETHEUS_PORT:-9090}/targets"; \
+		echo "  Alertmanager:   http://localhost:$${ALERTMANAGER_PORT:-9093}   (wire a receiver in monitoring/alertmanager.yml)"; \
+		echo "  Exporters:      postgres-exporter-db{1..N}, haproxy-exporter (scraped every 15s)"; \
+	else \
+		echo "=== Monitoring ==="; \
+		echo "  disabled — set ENABLE_MONITORING=1 in .env and run: make generate monitoring-up"; \
+	fi; \
+	echo ""; \
 	echo "=== Backup Backups ==="; \
 	if [ -n "$$LEADER" ]; then \
 		BACKUPS=$$(docker exec -u backup backup $$( [ "$$(grep -E '^BACKUP_TOOL=' .env 2>/dev/null | cut -d= -f2)" = pgbackrest ] && echo "pgbackrest --stanza=$$LEADER info" || echo "barman list-backup $$LEADER") 2>/dev/null | head -5); \
