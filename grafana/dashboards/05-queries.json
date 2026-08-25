@@ -1,0 +1,460 @@
+{
+ "uid": "patroni-queries",
+ "title": "05 \u00b7 Queries \u2014 pg_stat_statements",
+ "description": "Where does the time go? Requires pg_stat_statements extension (enabled at bootstrap).",
+ "tags": [
+  "queries",
+  "patroni-ha"
+ ],
+ "timezone": "utc",
+ "schemaVersion": 39,
+ "version": 1,
+ "refresh": "30s",
+ "time": {
+  "from": "now-3h",
+  "to": "now"
+ },
+ "panels": [
+  {
+   "id": 1049,
+   "title": "Statements tracked",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 0,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "count(pg_statements_top_calls)",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "short"
+     },
+     "overrides": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1050,
+   "title": "Total exec time (ms/s scrape)",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 4,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "sum(rate(pg_statements_top_total_exec_time_ms[5m])) / 1000",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "s"
+     },
+     "overrides": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1051,
+   "title": "Calls per second",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 8,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "sum(rate(pg_statements_top_calls[5m]))",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "ops"
+     },
+     "overrides": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1052,
+   "title": "Rows returned per second",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 12,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "sum(rate(pg_statements_top_rows[5m]))",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "ops"
+     },
+     "overrides": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1053,
+   "title": "Avg cache-hit % (top set)",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 16,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "avg(pg_statements_top_cache_hit_pct)",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "percent"
+     },
+     "overrides": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "yellow",
+        "value": 90
+       },
+       {
+        "color": "green",
+        "value": 97
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1054,
+   "title": "Top by TOTAL time",
+   "type": "table",
+   "gridPos": {
+    "h": 9,
+    "w": 12,
+    "x": 0,
+    "y": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "topk(15, pg_statements_top_total_exec_time_ms)",
+     "instant": true,
+     "format": "table",
+     "refId": "A"
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true,
+       "__name__": true,
+       "job": true
+      }
+     }
+    },
+    {
+     "id": "sorting",
+     "options": {
+      "sort": [
+       {
+        "field": "Value #A",
+        "desc": true
+       }
+      ]
+     }
+    }
+   ],
+   "options": {
+    "showHeader": true
+   }
+  },
+  {
+   "id": 1055,
+   "title": "Top by MEAN time",
+   "type": "table",
+   "gridPos": {
+    "h": 9,
+    "w": 12,
+    "x": 12,
+    "y": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "topk(15, pg_statements_top_mean_exec_time_ms)",
+     "instant": true,
+     "format": "table",
+     "refId": "A"
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true,
+       "__name__": true,
+       "job": true
+      }
+     }
+    },
+    {
+     "id": "sorting",
+     "options": {
+      "sort": [
+       {
+        "field": "Value #A",
+        "desc": true
+       }
+      ]
+     }
+    }
+   ],
+   "options": {
+    "showHeader": true
+   }
+  },
+  {
+   "id": 1056,
+   "title": "Mean execution time distribution (top 5)",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 6,
+    "w": 8,
+    "x": 0,
+    "y": 13
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "topk(5, pg_statements_top_mean_exec_time_ms)",
+     "legendFormat": "queryid {{queryid}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ms",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 1057,
+   "title": "Cache miss % (worst 5)",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 6,
+    "w": 8,
+    "x": 8,
+    "y": 13
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "topk(5, 100 - pg_statements_top_cache_hit_pct)",
+     "legendFormat": "queryid {{queryid}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 1058,
+   "title": "Calls rate (top 5)",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 6,
+    "w": 8,
+    "x": 16,
+    "y": 13
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "topk(5, rate(pg_statements_top_calls[5m]))",
+     "legendFormat": "queryid {{queryid}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ops",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  }
+ ]
+}

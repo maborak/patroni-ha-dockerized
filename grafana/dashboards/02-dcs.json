@@ -1,0 +1,608 @@
+{
+ "uid": "patroni-dcs",
+ "title": "02 \u00b7 Patroni & DCS",
+ "description": "Patroni member states, timeline history, DCS reachability, failover term age.",
+ "tags": [
+  "patroni",
+  "patroni-ha"
+ ],
+ "timezone": "utc",
+ "schemaVersion": 39,
+ "version": 1,
+ "refresh": "30s",
+ "time": {
+  "from": "now-3h",
+  "to": "now"
+ },
+ "panels": [
+  {
+   "id": 1015,
+   "title": "Member topology",
+   "type": "table",
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "patroni_postgres_running * on(instance) group_left patroni_primary",
+     "instant": true,
+     "format": "table",
+     "refId": "A"
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true,
+       "__name__": true,
+       "job": true
+      }
+     }
+    },
+    {
+     "id": "sorting",
+     "options": {
+      "sort": [
+       {
+        "field": "Value #A",
+        "desc": true
+       }
+      ]
+     }
+    }
+   ],
+   "options": {
+    "showHeader": true
+   }
+  },
+  {
+   "id": 1016,
+   "title": "Primary count",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 3,
+    "x": 12,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "count(patroni_primary == 1) or vector(0)",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "short"
+     },
+     "overrides": [],
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "1": {
+         "text": "OK",
+         "color": "green"
+        },
+        "0": {
+         "text": "NONE",
+         "color": "red"
+        }
+       }
+      }
+     ]
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1017,
+   "title": "Replicas streaming",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 3,
+    "x": 15,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "count(patroni_replica == 1)",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "short"
+     },
+     "overrides": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1018,
+   "title": "Pending restart nodes",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 3,
+    "x": 18,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "count(patroni_pending_restart == 1) or vector(0)",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "short"
+     },
+     "overrides": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "g",
+        "value": null
+       },
+       {
+        "color": "yellow",
+        "value": 1
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1019,
+   "title": "Failsafe active nodes",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 3,
+    "x": 21,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "count(patroni_failsafe_mode_is_active == 1) or vector(0)",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "short"
+     },
+     "overrides": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1020,
+   "title": "Timeline per node",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 6,
+    "w": 8,
+    "x": 0,
+    "y": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "max by (instance)(patroni_postgres_timeline)",
+     "legendFormat": "{{instance}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 1021,
+   "title": "DCS last seen (seconds ago)",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 6,
+    "w": 8,
+    "x": 8,
+    "y": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "time() - patroni_dcs_last_seen",
+     "legendFormat": "{{instance}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 1022,
+   "title": "WAL LSN position (bytes)",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 6,
+    "w": 8,
+    "x": 16,
+    "y": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "patroni_xlog_location",
+     "legendFormat": "{{instance}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 1023,
+   "title": "Primary start time / leader term age",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 5,
+    "w": 8,
+    "x": 0,
+    "y": 10
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "time() - patroni_postmaster_start_time",
+     "legendFormat": "leader term age (s)",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 1024,
+   "title": "Paused mode nodes",
+   "type": "stat",
+   "gridPos": {
+    "h": 5,
+    "w": 4,
+    "x": 8,
+    "y": 10
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "count(patroni_is_paused == 1) or vector(0)",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "short"
+     },
+     "overrides": [],
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "0": {
+         "text": "no",
+         "color": "green"
+        }
+       }
+      }
+     ]
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1025,
+   "title": "Postgres server version (min)",
+   "type": "stat",
+   "gridPos": {
+    "h": 5,
+    "w": 4,
+    "x": 12,
+    "y": 10
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "min(patroni_postgres_server_version) / 10000",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "short"
+     },
+     "overrides": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1026,
+   "title": "Nodes in archive recovery",
+   "type": "stat",
+   "gridPos": {
+    "h": 5,
+    "w": 4,
+    "x": 16,
+    "y": 10
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "count(patroni_postgres_in_archive_recovery == 1) or vector(0)",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "short"
+     },
+     "overrides": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1027,
+   "title": "Xlog paused anywhere",
+   "type": "stat",
+   "gridPos": {
+    "h": 5,
+    "w": 4,
+    "x": 20,
+    "y": 10
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "count(patroni_xlog_paused == 1) or vector(0)",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "short"
+     },
+     "overrides": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "g",
+        "value": null
+       },
+       {
+        "color": "red",
+        "value": 1
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  }
+ ]
+}

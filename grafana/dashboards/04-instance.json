@@ -1,0 +1,649 @@
+{
+ "uid": "patroni-instance",
+ "title": "04 \u00b7 PostgreSQL Instance",
+ "description": "Per-node drill-down. Pick a node with the Node selector.",
+ "tags": [
+  "postgres",
+  "patroni-ha"
+ ],
+ "timezone": "utc",
+ "schemaVersion": 39,
+ "version": 1,
+ "refresh": "30s",
+ "time": {
+  "from": "now-3h",
+  "to": "now"
+ },
+ "panels": [
+  {
+   "id": 1037,
+   "title": "Connections used",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 0,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "pg_activity_connections{instance=~\"$node\"} / pg_activity_max_connections{instance=~\"$node\"}",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "percentunit"
+     },
+     "overrides": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "g",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 0.7
+       },
+       {
+        "color": "red",
+        "value": 0.85
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1038,
+   "title": "Active backends",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 4,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "pg_activity_active{instance=~\"$node\"}",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "short"
+     },
+     "overrides": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1039,
+   "title": "Oldest transaction (s)",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 8,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "pg_transactions_longest_tx_seconds{instance=~\"$node\"}",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "s"
+     },
+     "overrides": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "g",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 300
+       },
+       {
+        "color": "red",
+        "value": 900
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1040,
+   "title": "Idle-in-tx count",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 12,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "pg_transactions_idle_in_tx_count{instance=~\"$node\"}",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "short"
+     },
+     "overrides": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "g",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 3
+       },
+       {
+        "color": "red",
+        "value": 10
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1041,
+   "title": "Waiting backends",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 16,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "pg_transactions_waiting_backends{instance=~\"$node\"}",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "short"
+     },
+     "overrides": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "g",
+        "value": null
+       },
+       {
+        "color": "yellow",
+        "value": 2
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1042,
+   "title": "Uptime (s)",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 20,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "pg_activity_process_uptime_seconds{instance=~\"$node\"}",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "s"
+     },
+     "overrides": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1043,
+   "title": "Transactions per second ($db)",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 7,
+    "w": 8,
+    "x": 0,
+    "y": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "sum(rate(pg_stat_database_xact_commit{datname=\"$db\", instance=~\"$node\"}[$__rate_interval]))",
+     "legendFormat": "commit",
+     "refId": "A"
+    },
+    {
+     "expr": "sum(rate(pg_stat_database_xact_rollback{datname=\"$db\", instance=~\"$node\"}[$__rate_interval]))",
+     "legendFormat": "rollback",
+     "refId": "B"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ops",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 1044,
+   "title": "Tuple traffic ($db)",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 7,
+    "w": 8,
+    "x": 8,
+    "y": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "sum(rate(pg_stat_database_tup_inserted{datname=\"$db\", instance=~\"$node\"}[$__rate_interval]))",
+     "legendFormat": "insert",
+     "refId": "A"
+    },
+    {
+     "expr": "sum(rate(pg_stat_database_tup_updated{datname=\"$db\", instance=~\"$node\"}[$__rate_interval]))",
+     "legendFormat": "update",
+     "refId": "B"
+    },
+    {
+     "expr": "sum(rate(pg_stat_database_tup_deleted{datname=\"$db\", instance=~\"$node\"}[$__rate_interval]))",
+     "legendFormat": "delete",
+     "refId": "C"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ops",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 1045,
+   "title": "Blocks hit vs read ($db)",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 7,
+    "w": 8,
+    "x": 16,
+    "y": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "sum(rate(pg_stat_database_blks_hit{datname=\"$db\", instance=~\"$node\"}[$__rate_interval]))",
+     "legendFormat": "hit",
+     "refId": "A"
+    },
+    {
+     "expr": "sum(rate(pg_stat_database_blks_read{datname=\"$db\", instance=~\"$node\"}[$__rate_interval]))",
+     "legendFormat": "read",
+     "refId": "B"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ops",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 1046,
+   "title": "Temp files & bytes",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 6,
+    "w": 8,
+    "x": 0,
+    "y": 11
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "rate(pg_stat_database_temp_files{datname=\"$db\", instance=~\"$node\"}[$__rate_interval])",
+     "legendFormat": "files/s",
+     "refId": "A"
+    },
+    {
+     "expr": "rate(pg_stat_database_temp_bytes{datname=\"$db\", instance=~\"$node\"}[$__rate_interval])",
+     "legendFormat": "bytes/s",
+     "refId": "B"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 1047,
+   "title": "Deadlocks & conflicts",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 6,
+    "w": 8,
+    "x": 8,
+    "y": 11
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "increase(pg_stat_database_deadlocks{datname=\"$db\", instance=~\"$node\"}[1h])",
+     "legendFormat": "deadlocks/h",
+     "refId": "A"
+    },
+    {
+     "expr": "increase(pg_stat_database_conflicts{datname=\"$db\", instance=~\"$node\"}[1h])",
+     "legendFormat": "conflicts/h",
+     "refId": "B"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 1048,
+   "title": "Key settings snapshot",
+   "type": "table",
+   "gridPos": {
+    "h": 6,
+    "w": 8,
+    "x": 16,
+    "y": 11
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "pg_settings_max_connections{instance=~\"$node\"}",
+     "instant": true,
+     "format": "table",
+     "refId": "A"
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true,
+       "__name__": true,
+       "job": true
+      }
+     }
+    },
+    {
+     "id": "sorting",
+     "options": {
+      "sort": [
+       {
+        "field": "Value #A",
+        "desc": true
+       }
+      ]
+     }
+    }
+   ],
+   "options": {
+    "showHeader": true
+   }
+  }
+ ],
+ "templating": {
+  "list": [
+   {
+    "name": "node",
+    "label": "Node",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "prom"
+    },
+    "query": "label_values(up{job=\"patroni\"}, instance)",
+    "refresh": 1,
+    "includeAll": false,
+    "multi": false,
+    "current": {
+     "text": "db1:8001",
+     "value": "db1:8001"
+    }
+   },
+   {
+    "name": "db",
+    "label": "Database",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "prom"
+    },
+    "query": "label_values(pg_database_size_bytes, datname)",
+    "refresh": 1,
+    "includeAll": false,
+    "current": {
+     "text": "maborak",
+     "value": "maborak"
+    }
+   }
+  ]
+ }
+}

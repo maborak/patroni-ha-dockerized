@@ -1,0 +1,305 @@
+{
+ "uid": "alerts-overview",
+ "title": "09 \u00b7 Alerts",
+ "description": "Live state of every rule defined in monitoring/prometheus-alerts.yml.",
+ "tags": [
+  "alerts",
+  "patroni-ha"
+ ],
+ "timezone": "utc",
+ "schemaVersion": 39,
+ "version": 1,
+ "refresh": "30s",
+ "time": {
+  "from": "now-3h",
+  "to": "now"
+ },
+ "panels": [
+  {
+   "id": 1084,
+   "title": "Critical firing",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 6,
+    "x": 0,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "count(ALERTS{alertstate=\"firing\",severity=\"critical\"} == 1) or vector(0)",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "short"
+     },
+     "overrides": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "g",
+        "value": null
+       },
+       {
+        "color": "red",
+        "value": 1
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1085,
+   "title": "Warning firing",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 6,
+    "x": 6,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "count(ALERTS{alertstate=\"firing\",severity=\"warning\"} == 1) or vector(0)",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "short"
+     },
+     "overrides": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "g",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 1
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1086,
+   "title": "All healthy checks",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 6,
+    "x": 12,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "count(up == 1)",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "short"
+     },
+     "overrides": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1087,
+   "title": "Firing alerts",
+   "type": "table",
+   "gridPos": {
+    "h": 8,
+    "w": 6,
+    "x": 18,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "ALERTS{alertstate=\"firing\"} == 1",
+     "instant": true,
+     "format": "table",
+     "refId": "A"
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true,
+       "__name__": true,
+       "job": true
+      }
+     }
+    },
+    {
+     "id": "sorting",
+     "options": {
+      "sort": [
+       {
+        "field": "Value #A",
+        "desc": true
+       }
+      ]
+     }
+    }
+   ],
+   "options": {
+    "showHeader": true
+   }
+  },
+  {
+   "id": 1088,
+   "title": "Alerts over time",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 5,
+    "w": 12,
+    "x": 0,
+    "y": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "count(ALERTS{alertstate=\"firing\"} == 1)",
+     "legendFormat": "firing",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 1089,
+   "title": "Every rule state (incl. OK)",
+   "type": "table",
+   "gridPos": {
+    "h": 10,
+    "w": 24,
+    "x": 0,
+    "y": 9
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "ALERTS",
+     "instant": true,
+     "format": "table",
+     "refId": "A"
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true,
+       "__name__": true,
+       "job": true
+      }
+     }
+    },
+    {
+     "id": "sorting",
+     "options": {
+      "sort": [
+       {
+        "field": "Value #A",
+        "desc": false
+       }
+      ]
+     }
+    }
+   ],
+   "options": {
+    "showHeader": true
+   }
+  }
+ ]
+}

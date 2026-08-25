@@ -1,0 +1,740 @@
+{
+ "uid": "patroni-overview",
+ "title": "01 \u00b7 Cluster Overview",
+ "description": "At-a-glance health of the whole HA cluster.",
+ "tags": [
+  "overview",
+  "patroni-ha"
+ ],
+ "timezone": "utc",
+ "schemaVersion": 39,
+ "version": 1,
+ "refresh": "30s",
+ "time": {
+  "from": "now-3h",
+  "to": "now"
+ },
+ "panels": [
+  {
+   "id": 1001,
+   "title": "Nodes up",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 0,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "count(up{job=\"patroni\"} == 1)",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "short"
+     },
+     "overrides": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "r",
+        "value": null
+       },
+       {
+        "color": "green",
+        "value": 3
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1002,
+   "title": "Leader present",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 4,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "count(patroni_primary == 1) or vector(0)",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "short"
+     },
+     "overrides": [],
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "1": {
+         "text": "YES",
+         "color": "green"
+        },
+        "0": {
+         "text": "NO LEADER",
+         "color": "red"
+        }
+       }
+      }
+     ]
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1003,
+   "title": "Max replication lag",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 8,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "max(patroni_xlog_location) - on(instance) (patroni_xlog_replayed_location + 0 * patroni_xlog_location)",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "bytes"
+     },
+     "overrides": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "g",
+        "value": null
+       },
+       {
+        "color": "yellow",
+        "value": 33554432
+       },
+       {
+        "color": "red",
+        "value": 134217728
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1004,
+   "title": "WAL archive staleness (s)",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 12,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "max(pg_archiver_since_last_archived_seconds)",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "s"
+     },
+     "overrides": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "g",
+        "value": null
+       },
+       {
+        "color": "yellow",
+        "value": 300
+       },
+       {
+        "color": "red",
+        "value": 600
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1005,
+   "title": "Oldest transaction (s)",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 16,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "max(pg_transactions_longest_tx_seconds)",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "s"
+     },
+     "overrides": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "g",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 300
+       },
+       {
+        "color": "red",
+        "value": 900
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1006,
+   "title": "Conn saturation",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 20,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "max(pg_activity_connections) / max(pg_activity_max_connections)",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "percentunit"
+     },
+     "overrides": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "g",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 0.7
+       },
+       {
+        "color": "red",
+        "value": 0.85
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1007,
+   "title": "Host disk free %",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 0,
+    "y": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "min(node_filesystem_avail_bytes{mountpoint=\"/host\",fstype=~\"xfs|ext4\"}) / min(node_filesystem_size_bytes{mountpoint=\"/host\",fstype=~\"xfs|ext4\"})",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "percentunit"
+     },
+     "overrides": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "r",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 0.15
+       },
+       {
+        "color": "green",
+        "value": 0.25
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1008,
+   "title": "Firing alerts",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 4,
+    "y": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "count(ALERTS{alertstate=\"firing\"} == 1) or vector(0)",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "short"
+     },
+     "overrides": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "g",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 1
+       },
+       {
+        "color": "red",
+        "value": 3
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1009,
+   "title": "Cluster TPS",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 8,
+    "y": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "sum(rate(pg_stat_database_xact_commit{datname=\"$db\"}[1m]))",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "ops"
+     },
+     "overrides": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1010,
+   "title": "WAL generation (B/s)",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 12,
+    "y": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "sum(deriv(patroni_xlog_location[2m]))",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "Bps"
+     },
+     "overrides": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1011,
+   "title": "DB size total",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 16,
+    "y": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "sum(pg_database_size_bytes)",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "bytes"
+     },
+     "overrides": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1012,
+   "title": "Autovac workers",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 20,
+    "y": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "max(pg_transactions_autovacuum_workers_running)",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "short"
+     },
+     "overrides": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 1013,
+   "title": "Firing alerts detail",
+   "type": "table",
+   "gridPos": {
+    "h": 7,
+    "w": 12,
+    "x": 0,
+    "y": 8
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "ALERTS{alertstate=\"firing\"} == 1",
+     "instant": true,
+     "format": "table",
+     "refId": "A"
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true,
+       "__name__": true,
+       "job": true
+      }
+     }
+    },
+    {
+     "id": "sorting",
+     "options": {
+      "sort": [
+       {
+        "field": "Value #A",
+        "desc": true
+       }
+      ]
+     }
+    }
+   ],
+   "options": {
+    "showHeader": true
+   }
+  },
+  {
+   "id": 1014,
+   "title": "Replication lag (bytes)",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 7,
+    "w": 12,
+    "x": 12,
+    "y": 8
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "max(patroni_xlog_location) - on(instance) (patroni_xlog_replayed_location + 0 * patroni_xlog_location)",
+     "legendFormat": "{{instance}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  }
+ ],
+ "templating": {
+  "list": [
+   {
+    "name": "db",
+    "label": "Database",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "prom"
+    },
+    "query": "label_values(pg_database_size_bytes, datname)",
+    "refresh": 1,
+    "includeAll": false,
+    "current": {
+     "text": "maborak",
+     "value": "maborak"
+    }
+   }
+  ]
+ }
+}
