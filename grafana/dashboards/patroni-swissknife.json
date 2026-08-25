@@ -1,227 +1,1628 @@
 {
-  "uid": "patroni-swissknife",
-  "title": "PostgreSQL HA — Swiss Knife",
-  "description": "Patroni topology, replication lag, WAL archiving, connection & query health for the patroni-ha-dockerized stack.",
-  "tags": ["patroni", "postgresql", "ha"],
-  "timezone": "utc",
-  "schemaVersion": 39,
-  "version": 1,
-  "refresh": "30s",
-  "time": { "from": "now-3h", "to": "now" },
-  "templating": {
-    "list": [
-      {
-        "name": "db",
-        "label": "Database",
-        "type": "query",
-        "datasource": { "type": "prometheus", "uid": "prom" },
-        "query": "label_values(pg_database_size_bytes, datname)",
-        "refresh": 1,
-        "includeAll": false,
-        "current": { "text": "maborak", "value": "maborak" }
-      }
-    ]
-  },
-  "panels": [
-    {
-      "id": 1,
-      "title": "Nodes up",
-      "type": "stat",
-      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "prom" },
-      "targets": [{ "expr": "count(up{job=\"patroni\"} == 1)", "instant": true }],
-      "fieldConfig": {
-        "defaults": {
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "red", "value": null },
-            { "color": "green", "value": 3 }
-          ]}
-        }
-      }
+ "uid": "patroni-swissknife",
+ "title": "PostgreSQL HA \u2014 Swiss Knife Pro",
+ "description": "Full-granularity: Patroni topology, replication, WAL/archiving, throughput, sessions & locks, pg_stat_statements, vacuum hotspots, host resources.",
+ "tags": [
+  "patroni",
+  "postgresql",
+  "ha"
+ ],
+ "timezone": "utc",
+ "schemaVersion": 39,
+ "version": 2,
+ "refresh": "30s",
+ "time": {
+  "from": "now-3h",
+  "to": "now"
+ },
+ "templating": {
+  "list": [
+   {
+    "name": "db",
+    "label": "Database",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "prom"
     },
-    {
-      "id": 2,
-      "title": "Leader present",
-      "type": "stat",
-      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "prom" },
-      "targets": [{ "expr": "count(patroni_primary == 1) or vector(0)", "instant": true }],
-      "fieldConfig": {
-        "defaults": {
-          "mappings": [
-            { "type": "value", "options": { "1": { "text": "YES", "color": "green" }, "0": { "text": "NO LEADER", "color": "red" } } }
-          ]
-        }
-      }
-    },
-    {
-      "id": 3,
-      "title": "WAL archive staleness (s)",
-      "type": "stat",
-      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "prom" },
-      "targets": [{ "expr": "max(pg_stat_archiver_since_last_archived_seconds)", "instant": true }],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "green", "value": null },
-            { "color": "yellow", "value": 300 },
-            { "color": "red", "value": 600 }
-          ]}
-        }
-      }
-    },
-    {
-      "id": 4,
-      "title": "Connections / max",
-      "type": "stat",
-      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "prom" },
-      "targets": [{ "expr": "max(pg_activity_connections) / max(pg_activity_max_connections)", "instant": true, "legendFormat": "{{instance}}" }],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "max": 1,
-          "thresholds": { "mode": "absolute", "steps": [
-            { "color": "green", "value": null },
-            { "color": "orange", "value": 0.7 },
-            { "color": "red", "value": 0.85 }
-          ]}
-        }
-      }
-    },
-    {
-      "id": 5,
-      "title": "DB size ($db)",
-      "type": "stat",
-      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "prom" },
-      "targets": [{ "expr": "pg_database_size_bytes{datname=\"$db\"}", "instant": true, "legendFormat": "{{instance}}" }],
-      "fieldConfig": { "defaults": { "unit": "bytes" } }
-    },
-    {
-      "id": 6,
-      "title": "PostgreSQL uptime",
-      "type": "stat",
-      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "prom" },
-      "targets": [{ "expr": "min(pg_process_uptime_seconds)", "instant": true }],
-      "fieldConfig": { "defaults": { "unit": "s" } }
-    },
-    {
-      "id": 10,
-      "title": "Cluster topology (Patroni)",
-      "type": "table",
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 4 },
-      "datasource": { "type": "prometheus", "uid": "prom" },
-      "targets": [
-        { "expr": "patroni_postgres_running * on(instance) group_left patroni_primary", "instant": true, "format": "table", "legendFormat": "" },
-        { "expr": "patroni_xlog_replayed_location + 0 * patroni_postgres_running", "instant": true, "format": "table" },
-        { "expr": "patroni_timeline", "instant": true, "format": "table" }
-      ],
-      "transformations": [
-        { "id": "organize", "options": { "excludeByName": { "Time": true, "__name__": true, "job": true }, "renameByName": { "Value #A": "running(leader=1)", "instance": "node" } } }
-      ]
-    },
-    {
-      "id": 11,
-      "title": "Replication lag (bytes)",
-      "type": "timeseries",
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 4 },
-      "datasource": { "type": "prometheus", "uid": "prom" },
-      "targets": [{
-        "expr": "max(patroni_xlog_location) - on(instance) (patroni_xlog_replayed_location + 0 * patroni_xlog_location)",
-        "legendFormat": "{{instance}}"
-      }],
-      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "fillOpacity": 15 } } }
-    },
-    {
-      "id": 12,
-      "title": "Replay delay (seconds)",
-      "type": "timeseries",
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 4 },
-      "datasource": { "type": "prometheus", "uid": "prom" },
-      "targets": [{ "expr": "pg_replication_replay_lag_seconds > 0", "legendFormat": "{{instance}}" }],
-      "fieldConfig": { "defaults": { "unit": "s", "custom": { "fillOpacity": 15 } } }
-    },
-    {
-      "id": 20,
-      "title": "Transactions per second ($db)",
-      "type": "timeseries",
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 12 },
-      "datasource": { "type": "prometheus", "uid": "prom" },
-      "targets": [
-        { "expr": "sum by (instance) (rate(pg_stat_database_xact_commit{datname=\"$db\"}[1m]))", "legendFormat": "commit {{instance}}" },
-        { "expr": "sum by (instance) (rate(pg_stat_database_xact_rollback{datname=\"$db\"}[1m]))", "legendFormat": "rollback {{instance}}" }
-      ],
-      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "fillOpacity": 10 } } }
-    },
-    {
-      "id": 21,
-      "title": "Cache hit ratio ($db)",
-      "type": "timeseries",
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 12 },
-      "datasource": { "type": "prometheus", "uid": "prom" },
-      "targets": [{
-        "expr": "sum by (instance) (rate(pg_stat_database_blks_hit{datname=\"$db\"}[5m]) / (rate(pg_stat_database_blks_hit{datname=\"$db\"}[5m]) + rate(pg_stat_database_blks_read{datname=\"$db\"}[5m])) > 0)",
-        "legendFormat": "{{instance}}"
-      }],
-      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0.9, "custom": { "fillOpacity": 10 } } }
-    },
-    {
-      "id": 22,
-      "title": "WAL archiver — archived vs failed",
-      "type": "timeseries",
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 12 },
-      "datasource": { "type": "prometheus", "uid": "prom" },
-      "targets": [
-        { "expr": "sum by (instance) (rate(pg_stat_archiver_archived_count[5m]))", "legendFormat": "archived {{instance}}" },
-        { "expr": "sum by (instance) (rate(pg_stat_archiver_failed_count[5m]))", "legendFormat": "failed {{instance}}" }
-      ],
-      "fieldConfig": { "defaults": { "unit": "ops" } }
-    },
-    {
-      "id": 30,
-      "title": "Temporary file bytes",
-      "type": "timeseries",
-      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 20 },
-      "datasource": { "type": "prometheus", "uid": "prom" },
-      "targets": [{ "expr": "rate(pg_stat_database_temp_bytes{datname=\"$db\"}[5m])", "legendFormat": "{{instance}}" }],
-      "fieldConfig": { "defaults": { "unit": "Bps" } }
-    },
-    {
-      "id": 31,
-      "title": "Deadlocks & conflicts",
-      "type": "timeseries",
-      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 20 },
-      "datasource": { "type": "prometheus", "uid": "prom" },
-      "targets": [
-        { "expr": "increase(pg_stat_database_deadlocks{datname=\"$db\"}[1h])", "legendFormat": "deadlocks {{instance}}" },
-        { "expr": "increase(pg_stat_database_conflicts{datname=\"$db\"}[1h])", "legendFormat": "conflicts {{instance}}" }
-      ],
-      "fieldConfig": { "defaults": { "unit": "short" } }
-    },
-    {
-      "id": 32,
-      "title": "Checkpoints (timed vs requested)",
-      "type": "timeseries",
-      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 20 },
-      "datasource": { "type": "prometheus", "uid": "prom" },
-      "targets": [
-        { "expr": "rate(pg_checkpoints_timed[5m])", "legendFormat": "timed {{instance}}" },
-        { "expr": "rate(pg_checkpoints_requested[5m])", "legendFormat": "requested {{instance}}" }
-      ],
-      "fieldConfig": { "defaults": { "unit": "ops" } }
-    },
-    {
-      "id": 33,
-      "title": "HAProxy sessions by frontend",
-      "type": "timeseries",
-      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 20 },
-      "datasource": { "type": "prometheus", "uid": "prom" },
-      "targets": [{ "expr": "sum by (frontend) (rate(haproxy_frontend_sessions_total[1m]))", "legendFormat": "{{frontend}}" }],
-      "fieldConfig": { "defaults": { "unit": "ops" } }
+    "query": "label_values(pg_database_size_bytes, datname)",
+    "refresh": 1,
+    "includeAll": false,
+    "current": {
+     "text": "maborak",
+     "value": "maborak"
     }
+   }
   ]
+ },
+ "annotations": {
+  "list": [
+   {
+    "builtIn": 1,
+    "type": "dashboard",
+    "enable": true
+   }
+  ]
+ },
+ "panels": [
+  {
+   "id": 1,
+   "title": "Nodes up",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 0,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "count(up{job=\"patroni\"} == 1)",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "short"
+     },
+     "overrides": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       },
+       {
+        "color": "green",
+        "value": 3
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value"
+   }
+  },
+  {
+   "id": 2,
+   "title": "Leader present",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 4,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "count(patroni_primary == 1) or vector(0)",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "short"
+     },
+     "overrides": [],
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "1": {
+         "text": "YES",
+         "color": "green"
+        },
+        "0": {
+         "text": "NO LEADER",
+         "color": "red"
+        }
+       }
+      }
+     ]
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value"
+   }
+  },
+  {
+   "id": 3,
+   "title": "WAL archive staleness (s)",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 8,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "max(pg_archiver_since_last_archived_seconds)",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "s"
+     },
+     "overrides": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       },
+       {
+        "color": "yellow",
+        "value": 300
+       },
+       {
+        "color": "red",
+        "value": 600
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value"
+   }
+  },
+  {
+   "id": 4,
+   "title": "Oldest transaction (s)",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 12,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "max(pg_transactions_longest_tx_seconds)",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "s"
+     },
+     "overrides": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 300
+       },
+       {
+        "color": "red",
+        "value": 900
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value"
+   }
+  },
+  {
+   "id": 5,
+   "title": "Idle-in-tx sessions",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 16,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "max(pg_transactions_idle_in_tx_count)",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "short"
+     },
+     "overrides": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 3
+       },
+       {
+        "color": "red",
+        "value": 10
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value"
+   }
+  },
+  {
+   "id": 6,
+   "title": "Host disk free %",
+   "type": "stat",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 20,
+    "y": 0
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "min(node_filesystem_avail_bytes{mountpoint=\"/host\"}) / min(node_filesystem_size_bytes{mountpoint=\"/host\"})",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "percentunit"
+     },
+     "overrides": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 0.15
+       },
+       {
+        "color": "green",
+        "value": 0.25
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value"
+   }
+  },
+  {
+   "id": 7,
+   "title": "Cluster topology",
+   "type": "table",
+   "gridPos": {
+    "h": 9,
+    "w": 8,
+    "x": 0,
+    "y": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "patroni_postgres_running * on(instance) group_left patroni_primary",
+     "instant": true,
+     "format": "table",
+     "refId": "A"
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true,
+       "__name__": true,
+       "job": true
+      }
+     }
+    },
+    {
+     "id": "sorting",
+     "options": {
+      "sort": [
+       {
+        "field": "Value #A",
+        "desc": true
+       }
+      ]
+     }
+    }
+   ],
+   "options": {
+    "showHeader": true
+   }
+  },
+  {
+   "id": 8,
+   "title": "Replication lag (bytes)",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 5,
+    "w": 8,
+    "x": 8,
+    "y": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "max(patroni_xlog_location) - on(instance) (patroni_xlog_replayed_location + 0 * patroni_xlog_location)",
+     "legendFormat": "{{instance}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 9,
+   "title": "Replay delay (seconds)",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 5,
+    "w": 8,
+    "x": 16,
+    "y": 4
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "pg_replication_replay_lag_seconds > 0",
+     "legendFormat": "{{instance}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 10,
+   "title": "Timeline per node",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 8,
+    "y": 9
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "max by (instance)(patroni_timeline)",
+     "legendFormat": "{{instance}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 11,
+   "title": "DCS last seen (s ago)",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 12,
+    "y": 9
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "time() - patroni_dcs_last_seen",
+     "legendFormat": "{{instance}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 12,
+   "title": "Replication slots \u2014 retained WAL",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 4,
+    "w": 8,
+    "x": 16,
+    "y": 9
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "pg_replication_slots_pg_wal_lsn_diff",
+     "legendFormat": "{{slot}} @ {{instance}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 13,
+   "title": "WAL directory size",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 6,
+    "w": 6,
+    "x": 0,
+    "y": 13
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "pg_wal_size_bytes",
+     "legendFormat": "size {{instance}}",
+     "refId": "A"
+    },
+    {
+     "expr": "pg_wal_segments * 16777216",
+     "legendFormat": "segments\u00d716MB {{instance}}",
+     "refId": "B"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 14,
+   "title": "WAL archive rate",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 6,
+    "w": 6,
+    "x": 6,
+    "y": 13
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "sum by (instance)(rate(pg_stat_archiver_archived_count[5m]))",
+     "legendFormat": "archived {{instance}}",
+     "refId": "A"
+    },
+    {
+     "expr": "sum by (instance)(rate(pg_stat_archiver_failed_count[5m]))",
+     "legendFormat": "FAILED {{instance}}",
+     "refId": "B"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ops",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 15,
+   "title": "Archive failures (1h)",
+   "type": "stat",
+   "gridPos": {
+    "h": 6,
+    "w": 3,
+    "x": 12,
+    "y": 13
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "sum(increase(pg_stat_archiver_failed_count[1h]))",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "short"
+     },
+     "overrides": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       },
+       {
+        "color": "red",
+        "value": 1
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value"
+   }
+  },
+  {
+   "id": 16,
+   "title": "Checkpoint pressure (requested ratio)",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 6,
+    "w": 3,
+    "x": 15,
+    "y": 13
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "rate(pg_checkpoints_requested[5m]) / clamp_min(rate(pg_checkpoints_timed[5m]) + rate(pg_checkpoints_requested[5m]), 0.001)",
+     "legendFormat": "{{instance}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 17,
+   "title": "WAL generation rate (bytes/s)",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 4,
+    "w": 12,
+    "x": 0,
+    "y": 19
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "deriv(patroni_xlog_location[2m])",
+     "legendFormat": "{{instance}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "Bps",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 18,
+   "title": "Max WAL size vs pg_wal dir",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 4,
+    "w": 6,
+    "x": 12,
+    "y": 19
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "pg_settings_max_wal_size_bytes",
+     "legendFormat": "max_wal_size {{instance}}",
+     "refId": "A"
+    },
+    {
+     "expr": "pg_wal_size_bytes",
+     "legendFormat": "pg_wal dir {{instance}}",
+     "refId": "B"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 19,
+   "title": "Transactions per second ($db)",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 7,
+    "w": 8,
+    "x": 0,
+    "y": 23
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "sum by (instance) (rate(pg_stat_database_xact_commit{datname=\"$db\"}[$__rate_interval]))",
+     "legendFormat": "commit {{instance}}",
+     "refId": "A"
+    },
+    {
+     "expr": "sum by (instance) (rate(pg_stat_database_xact_rollback{datname=\"$db\"}[$__rate_interval]))",
+     "legendFormat": "rollback {{instance}}",
+     "refId": "B"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ops",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 20,
+   "title": "Tuple traffic ($db)",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 7,
+    "w": 8,
+    "x": 8,
+    "y": 23
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "sum by (instance)(rate(pg_stat_database_tup_inserted{datname=\"$db\"}[$__rate_interval]))",
+     "legendFormat": "insert",
+     "refId": "A"
+    },
+    {
+     "expr": "sum by (instance)(rate(pg_stat_database_tup_updated{datname=\"$db\"}[$__rate_interval]))",
+     "legendFormat": "update",
+     "refId": "B"
+    },
+    {
+     "expr": "sum by (instance)(rate(pg_stat_database_tup_deleted{datname=\"$db\"}[$__rate_interval]))",
+     "legendFormat": "delete",
+     "refId": "C"
+    },
+    {
+     "expr": "sum by (instance)(rate(pg_stat_database_tup_returned{datname=\"$db\"}[$__rate_interval]))",
+     "legendFormat": "returned",
+     "refId": "D"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ops",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 21,
+   "title": "Cache hit ratio ($db)",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 7,
+    "w": 8,
+    "x": 16,
+    "y": 23
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "sum by (instance) (rate(pg_stat_database_blks_hit{datname=\"$db\"}[$__rate_interval]) / clamp_min(rate(pg_stat_database_blks_hit{datname=\"$db\"}[$__rate_interval]) + rate(pg_stat_database_blks_read{datname=\"$db\"}[$__rate_interval]), 0.001)) > 0",
+     "legendFormat": "{{instance}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 22,
+   "title": "Connections",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 6,
+    "w": 6,
+    "x": 0,
+    "y": 30
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "pg_activity_connections",
+     "legendFormat": "used {{instance}}",
+     "refId": "A"
+    },
+    {
+     "expr": "pg_activity_max_connections",
+     "legendFormat": "max {{instance}}",
+     "refId": "B"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 23,
+   "title": "Active backends",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 6,
+    "w": 6,
+    "x": 6,
+    "y": 30
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "pg_activity_active",
+     "legendFormat": "{{instance}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 24,
+   "title": "Locks by mode/state",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 6,
+    "w": 6,
+    "x": 12,
+    "y": 30
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "pg_locks_detail_locks",
+     "legendFormat": "{{mode}} {{state}} {{instance}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 25,
+   "title": "Waiting / idle-in-tx",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 6,
+    "w": 6,
+    "x": 18,
+    "y": 30
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "pg_transactions_waiting_backends",
+     "legendFormat": "waiting {{instance}}",
+     "refId": "A"
+    },
+    {
+     "expr": "pg_transactions_idle_in_tx_count",
+     "legendFormat": "idle-in-tx {{instance}}",
+     "refId": "B"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 26,
+   "title": "Top statements by total time (pg_stat_statements)",
+   "type": "table",
+   "gridPos": {
+    "h": 9,
+    "w": 14,
+    "x": 0,
+    "y": 36
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "topk(15, pg_statements_top_total_exec_time_ms)",
+     "instant": true,
+     "format": "table",
+     "refId": "A"
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true,
+       "__name__": true,
+       "job": true
+      }
+     }
+    },
+    {
+     "id": "sorting",
+     "options": {
+      "sort": [
+       {
+        "field": "Value #A",
+        "desc": true
+       }
+      ]
+     }
+    }
+   ],
+   "options": {
+    "showHeader": true
+   }
+  },
+  {
+   "id": 27,
+   "title": "Top-5 mean exec time (ms)",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 9,
+    "w": 5,
+    "x": 14,
+    "y": 36
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "topk(5, pg_statements_top_mean_exec_time_ms)",
+     "legendFormat": "queryid {{queryid}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ms",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 28,
+   "title": "Temp files bytes/s ($db)",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 9,
+    "w": 5,
+    "x": 19,
+    "y": 36
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "rate(pg_stat_database_temp_bytes{datname=\"$db\"}[$__rate_interval]) > 0",
+     "legendFormat": "{{instance}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "Bps",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 29,
+   "title": "Vacuum hotspots \u2014 dead ratio",
+   "type": "table",
+   "gridPos": {
+    "h": 8,
+    "w": 10,
+    "x": 0,
+    "y": 45
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "topk(10, pg_vacuum_hotspots_dead_ratio_pct)",
+     "instant": true,
+     "format": "table",
+     "refId": "A"
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true,
+       "__name__": true,
+       "job": true
+      }
+     }
+    },
+    {
+     "id": "sorting",
+     "options": {
+      "sort": [
+       {
+        "field": "Value #A",
+        "desc": true
+       }
+      ]
+     }
+    }
+   ],
+   "options": {
+    "showHeader": true
+   }
+  },
+  {
+   "id": 30,
+   "title": "Autovac workers running",
+   "type": "stat",
+   "gridPos": {
+    "h": 8,
+    "w": 4,
+    "x": 10,
+    "y": 45
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "max(pg_transactions_autovacuum_workers_running)",
+     "instant": true,
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "defaults": {
+      "unit": "short"
+     },
+     "overrides": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "value"
+   }
+  },
+  {
+   "id": 31,
+   "title": "Dead tuples \u2014 top tables",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 8,
+    "w": 10,
+    "x": 14,
+    "y": 45
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "topk(5, pg_vacuum_hotspots_dead_tup)",
+     "legendFormat": "{{rel}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 32,
+   "title": "Host memory available",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 6,
+    "w": 8,
+    "x": 0,
+    "y": 53
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "node_memory_MemAvailable_bytes",
+     "legendFormat": "available",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 33,
+   "title": "Host CPU busy %",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 6,
+    "w": 8,
+    "x": 8,
+    "y": 53
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "100 * (1 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[$__rate_interval])))",
+     "legendFormat": "busy",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 34,
+   "title": "Host filesystem free bytes",
+   "type": "timeseries",
+   "gridPos": {
+    "h": 6,
+    "w": 8,
+    "x": 16,
+    "y": 53
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "targets": [
+    {
+     "expr": "node_filesystem_avail_bytes{mountpoint=\"/host\",fstype=~\"xfs|ext4\"}",
+     "legendFormat": "{{device}}",
+     "refId": "A"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "fillOpacity": 12,
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  }
+ ]
 }

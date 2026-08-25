@@ -62,12 +62,113 @@ pg_database_size:
         description: "Database size in bytes"
 
 pg_checkpoints:
+  # PG17+: checkpoint counters live in pg_stat_checkpointer (not bgwriter)
   query: |
-    SELECT checkpoints_timed::bigint AS timed,
-           checkpoints_req::bigint AS requested
-    FROM pg_stat_bgwriter
+    SELECT num_timed::bigint AS timed,
+           num_requested::bigint AS requested
+    FROM pg_stat_checkpointer
   metrics:
     - timed:
         usage: "COUNTER"
     - requested:
         usage: "COUNTER"
+
+pg_statements_top:
+  # Top statements by total execution time (requires pg_stat_statements)
+  query: |
+    SELECT queryid::text AS queryid,
+           calls::bigint AS calls,
+           round(total_exec_time::numeric, 2)::float AS total_exec_time_ms,
+           round(mean_exec_time::numeric, 3)::float AS mean_exec_time_ms,
+           rows::bigint AS rows,
+           round((shared_blks_hit::numeric / GREATEST(shared_blks_hit + shared_blks_read, 1)) * 100, 2)::float AS cache_hit_pct
+    FROM pg_stat_statements
+    ORDER BY total_exec_time DESC
+    LIMIT 20
+  metrics:
+    - queryid:
+        usage: "LABEL"
+        description: "Query fingerprint id"
+    - calls:
+        usage: "COUNTER"
+    - total_exec_time_ms:
+        usage: "COUNTER"
+        description: "Total exec time ms"
+    - mean_exec_time_ms:
+        usage: "GAUGE"
+    - rows:
+        usage: "COUNTER"
+    - cache_hit_pct:
+        usage: "GAUGE"
+
+pg_locks_detail:
+  query: |
+    SELECT mode, CASE WHEN granted THEN 'granted' ELSE 'waiting' END AS state,
+           count(*)::bigint AS locks
+    FROM pg_locks
+    GROUP BY mode, state
+  metrics:
+    - mode:
+        usage: "LABEL"
+    - state:
+        usage: "LABEL"
+    - locks:
+        usage: "GAUGE"
+        description: "Locks by mode and granted/waiting"
+
+pg_transactions:
+  query: |
+    SELECT
+      COALESCE(EXTRACT(EPOCH FROM now() - min(xact_start)), 0)::float AS longest_tx_seconds,
+      COALESCE(EXTRACT(EPOCH FROM now() - min(xact_start) FILTER (WHERE state = 'idle in transaction')), 0)::float AS longest_idle_in_tx_seconds,
+      count(*) FILTER (WHERE state = 'idle in transaction')::int AS idle_in_tx_count,
+      count(*) FILTER (WHERE wait_event IS NOT NULL AND backend_type = 'client backend')::int AS waiting_backends,
+      count(*) FILTER (WHERE backend_type = 'autovacuum worker')::int AS autovacuum_workers_running
+    FROM pg_stat_activity
+    WHERE backend_type IN ('client backend', 'autovacuum worker')
+  metrics:
+    - longest_tx_seconds:
+        usage: "GAUGE"
+        description: "Age of oldest running transaction"
+    - longest_idle_in_tx_seconds:
+        usage: "GAUGE"
+    - idle_in_tx_count:
+        usage: "GAUGE"
+    - waiting_backends:
+        usage: "GAUGE"
+    - autovacuum_workers_running:
+        usage: "GAUGE"
+
+pg_wal_rate:
+  query: |
+    SELECT pg_current_wal_lsn() - '0/0' AS wal_lsn_bytes
+  metrics:
+    - wal_lsn_bytes:
+        usage: "GAUGE"
+        description: "Current WAL LSN as bytes (rate = WAL generation)"
+
+pg_vacuum_hotspots:
+  query: |
+    SELECT schemaname || '.' || relname AS rel,
+           n_live_tup::bigint AS live_tup,
+           n_dead_tup::bigint AS dead_tup,
+           round(n_dead_tup::numeric / GREATEST(n_live_tup + n_dead_tup, 1) * 100, 2)::float AS dead_ratio_pct,
+           seq_scan::bigint AS seq_scan,
+           COALESCE(EXTRACT(EPOCH FROM now() - last_autovacuum), 0)::float AS since_last_autovacuum_seconds
+    FROM pg_stat_user_tables
+    WHERE n_live_tup + n_dead_tup > 0
+    ORDER BY n_dead_tup DESC
+    LIMIT 15
+  metrics:
+    - rel:
+        usage: "LABEL"
+    - live_tup:
+        usage: "GAUGE"
+    - dead_tup:
+        usage: "GAUGE"
+    - dead_ratio_pct:
+        usage: "GAUGE"
+    - seq_scan:
+        usage: "COUNTER"
+    - since_last_autovacuum_seconds:
+        usage: "GAUGE"

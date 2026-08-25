@@ -49,3 +49,40 @@ groups:
         labels: {severity: warning}
         annotations:
           summary: ">85% of max_connections used on {{ $labels.instance }}"
+
+  - name: host-resources
+    rules:
+      - alert: HostDiskAlmostFull
+        expr: node_filesystem_avail_bytes{mountpoint="/host",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{mountpoint="/host",fstype!~"tmpfs|overlay"} < 0.15
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "Host filesystem {{ $labels.device }} <15% free"
+
+      - alert: LongRunningTransaction
+        expr: pg_transactions_longest_tx_seconds > 900
+        for: 0m
+        labels: {severity: warning}
+        annotations:
+          summary: "Transaction running >15min on {{ $labels.instance }}"
+
+      - alert: IdleInTransactionLeak
+        expr: pg_transactions_idle_in_tx_count > 5 and pg_transactions_longest_idle_in_tx_seconds > 600
+        for: 2m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.instance }} idle-in-transaction leak (>5 sessions, oldest >10min)"
+
+      - alert: WaitingBackends
+        expr: pg_transactions_waiting_backends > 4
+        for: 3m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.instance }} has {{ $value }} backends waiting on locks"
+
+      - alert: ReplicationSlotRetainedWAL
+        expr: max(pg_replication_slots_pg_wal_lsn_diff) / 1024 / 1024 / 1024 > 2
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "A replication slot is retaining >2GB of WAL"

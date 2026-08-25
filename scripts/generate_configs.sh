@@ -514,6 +514,18 @@ if [ "${ENABLE_MONITORING:-0}" = "1" ]; then
     command: --haproxy.scrape-uri=http://${HAPROXY_STATS_USER:-admin}:${HAPROXY_STATS_PASSWORD:-haproxy_stats_secret}@haproxy:8404/stats;csv
     networks: [patroni_network]
     restart: unless-stopped
+
+  node-exporter:
+    image: docker.io/prom/node-exporter:v1.8.2
+    container_name: node-exporter
+    command:
+      - --path.rootfs=/host
+    volumes:
+      - /:/host:ro,rslave
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+    networks: [patroni_network]
+    restart: unless-stopped
 MONSVCS
       for i in $(seq 1 $PATRONI_NODES); do
         echo "  postgres-exporter-db${i}:"
