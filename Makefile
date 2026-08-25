@@ -270,6 +270,7 @@ backup: ## Create backup (auto-detects leader, or use SERVER=db1 to override)
 		echo "Using specified server: $$SERVER (overriding leader detection)"; \
 	else \
 		echo "Leader detected: $$SERVER"; \
+		docker exec -u backup backup sh -c "pgbackrest --stanza=$$SERVER stanza-create" >/dev/null 2>&1 || true; \
 	fi; \
 	echo ""; \
 	echo "=== Step 3: Backup Check ==="; \

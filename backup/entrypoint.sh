@@ -73,6 +73,7 @@ for SSH_HOME in /root "$BARMAN_HOME" /home/backup; do
     mkdir -p "$SSH_HOME/.ssh"
     printf '%s\n' "$SSH_CONFIG" > "$SSH_HOME/.ssh/config"
     chmod 600 "$SSH_HOME/.ssh/config"
+    [ "$SSH_HOME" = "/root" ] || chown -R backup:backup "$SSH_HOME/.ssh"
     rm -f "$SSH_HOME/.ssh/known_hosts"
 done
 echo "SSH StrictHostKeyChecking=accept-new configured; stale known_hosts cleared"
